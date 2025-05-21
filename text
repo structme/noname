@@ -1,0 +1,22 @@
+DECLARE
+    CURSOR numara_cursor IS
+        SELECT numara FROM numaralar_tablosu ORDER BY numara;
+    
+    v_numara   numaralar_tablosu.numara%TYPE;
+    v_sonuc    VARCHAR2(100);
+BEGIN
+    FOR rec IN numara_cursor LOOP
+        v_numara := rec.numara;
+
+        -- Prosedürü çağır
+        my_procedure(p_numara => v_numara, p_sonuc => v_sonuc);
+
+        DBMS_OUTPUT.PUT_LINE('Denendi: ' || v_numara || ', Sonuç: ' || v_sonuc);
+
+        -- Aradığın değeri bulduysan çık
+        IF v_sonuc = 'BULUNDU' THEN
+            DBMS_OUTPUT.PUT_LINE('Uygun numara bulundu: ' || v_numara);
+            EXIT;
+        END IF;
+    END LOOP;
+END;
