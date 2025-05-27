@@ -1,19 +1,24 @@
 $klasor = "C:\Senin\Klasor\Yolu"
-$outfile = "liste.txt"
+$listeDosyasi = "liste.txt"
+$eslesmeyenDosya = "eslesmeyenler.txt"
 $regex = "\b[\w$]+\.[\w$]+\b"
+
+# Önceki sonuçları temizle
+Remove-Item $listeDosyasi, $eslesmeyenDosya -ErrorAction SilentlyContinue
 
 $dosyalar = Get-ChildItem -Path $klasor -Recurse -Filter *.prc
 $bulunan = 0
-$toplam = $dosyalar.Count
 
 foreach ($dosya in $dosyalar) {
     $satir = Get-Content $dosya.FullName -TotalCount 1
     if ($satir -match $regex) {
-        Add-Content -Path $outfile -Value $Matches[0]
+        Add-Content -Path $listeDosyasi -Value $Matches[0]
         $bulunan++
+    } else {
+        Add-Content -Path $eslesmeyenDosya -Value $dosya.FullName
     }
 }
 
-Write-Host "Toplam .PRC dosyası: $toplam"
-Write-Host "İçinden eşleşme bulunan: $bulunan"
-Write-Host "Eşleşmeyen dosya sayısı: $(($toplam - $bulunan))"
+Write-Host "Toplam .PRC dosyası: $($dosyalar.Count)"
+Write-Host "Eşleşen prosedür ismi bulunan: $bulunan"
+Write-Host "Eşleşemeyen dosya sayısı: $($dosyalar.Count - $bulunan)"
