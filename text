@@ -1,1 +1,19 @@
-$klasor = "C:\Senin\Klasor\Yolu"; Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object { $line = Get-Content $_.FullName -TotalCount 1; if ($line -match "\b[\w]+\.[\w]+\b") { $matches[0] } } | Out-File "liste.txt"
+$klasor = "C:\Senin\Klasor\Yolu"
+$outfile = "liste.txt"
+$regex = "\b[\w$]+\.[\w$]+\b"
+
+$dosyalar = Get-ChildItem -Path $klasor -Recurse -Filter *.prc
+$bulunan = 0
+$toplam = $dosyalar.Count
+
+foreach ($dosya in $dosyalar) {
+    $satir = Get-Content $dosya.FullName -TotalCount 1
+    if ($satir -match $regex) {
+        Add-Content -Path $outfile -Value $Matches[0]
+        $bulunan++
+    }
+}
+
+Write-Host "Toplam .PRC dosyası: $toplam"
+Write-Host "İçinden eşleşme bulunan: $bulunan"
+Write-Host "Eşleşmeyen dosya sayısı: $(($toplam - $bulunan))"
