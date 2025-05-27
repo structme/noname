@@ -1,9 +1,9 @@
 $klasor = "C:\Senin\Klasor\Yolu"
 $listeDosyasi = "liste.txt"
 $eslesmeyenDosya = "eslesmeyenler.txt"
-$regex = "\b[\w$]+\.[\w$]+\b"
+$regex = '\b[\w$]+\.(?:"?[\w$]+"?)\b'
 
-# Önceki sonuçları temizle
+# Önceki çıktı dosyalarını temizle
 Remove-Item $listeDosyasi, $eslesmeyenDosya -ErrorAction SilentlyContinue
 
 $dosyalar = Get-ChildItem -Path $klasor -Recurse -Filter *.prc
@@ -12,7 +12,8 @@ $bulunan = 0
 foreach ($dosya in $dosyalar) {
     $satir = Get-Content $dosya.FullName -TotalCount 1
     if ($satir -match $regex) {
-        Add-Content -Path $listeDosyasi -Value $Matches[0]
+        $isim = $Matches[0] -replace '"', ''  # çift tırnak varsa kaldır
+        Add-Content -Path $listeDosyasi -Value $isim
         $bulunan++
     } else {
         Add-Content -Path $eslesmeyenDosya -Value $dosya.FullName
