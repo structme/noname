@@ -1,52 +1,12 @@
-DECLARE
-    CURSOR numara_cursor IS
-        SELECT numara FROM numaralar_tablosu ORDER BY numara;
-    
-    v_numara   numaralar_tablosu.numara%TYPE;
-    v_cursor   SYS_REFCURSOR;
-    
-    -- 21 dummy sütun (istenmeyen sütunlar)
-    dummy1  VARCHAR2(100); dummy2  VARCHAR2(100); dummy3  VARCHAR2(100);
-    dummy4  VARCHAR2(100); dummy5  VARCHAR2(100); dummy6  VARCHAR2(100);
-    dummy7  VARCHAR2(100); dummy8  VARCHAR2(100); dummy9  VARCHAR2(100);
-    dummy10 VARCHAR2(100); dummy11 VARCHAR2(100); dummy12 VARCHAR2(100);
-    dummy13 VARCHAR2(100); dummy14 VARCHAR2(100); dummy15 VARCHAR2(100);
-    dummy16 VARCHAR2(100); dummy17 VARCHAR2(100); dummy18 VARCHAR2(100);
-    dummy19 VARCHAR2(100); dummy20 VARCHAR2(100); dummy21 VARCHAR2(100);
+@echo off
+setlocal enabledelayedexpansion
 
-    v_son_sutun NUMBER;  -- 22. sütun
+set "klasor=C:\Senin\Klasor\Yolu"
+echo. > liste.txt
 
-    v_gecerli BOOLEAN;
-BEGIN
-    FOR rec IN numara_cursor LOOP
-        v_numara := rec.numara;
-        v_gecerli := TRUE;
-
-        -- Prosedür çağrılıyor
-        get_bilgiler(p_numara => v_numara, p_cursor => v_cursor);
-
-        -- Cursor taranıyor
-        LOOP
-            FETCH v_cursor INTO dummy1, dummy2, dummy3, dummy4, dummy5,
-                              dummy6, dummy7, dummy8, dummy9, dummy10,
-                              dummy11, dummy12, dummy13, dummy14, dummy15,
-                              dummy16, dummy17, dummy18, dummy19, dummy20,
-                              dummy21, v_son_sutun;
-            EXIT WHEN v_cursor%NOTFOUND;
-
-            IF v_son_sutun > 0 THEN
-                v_gecerli := FALSE;
-                EXIT;
-            END IF;
-        END LOOP;
-
-        CLOSE v_cursor;
-
-        IF v_gecerli THEN
-            DBMS_OUTPUT.PUT_LINE('Uygun numara bulundu: ' || v_numara);
-            EXIT;
-        ELSE
-            DBMS_OUTPUT.PUT_LINE('Uygun değil: ' || v_numara);
-        END IF;
-    END LOOP;
-END;
+for /R "%klasor%" %%f in (*.prc) do (
+    set "line="
+    set /p line=<"%%f"
+    for %%a in (!line!) do set "last=%%a"
+    echo !last! >> liste.txt
+)
