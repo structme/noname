@@ -1,12 +1,1 @@
-@echo off
-setlocal enabledelayedexpansion
-
-set "klasor=C:\Senin\Klasor\Yolu"
-echo. > liste.txt
-
-for /R "%klasor%" %%f in (*.prc) do (
-    set "line="
-    set /p line=<"%%f"
-    for %%a in (!line!) do set "last=%%a"
-    echo !last! >> liste.txt
-)
+$klasor = "C:\Senin\Klasor\Yolu"; Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object { $line = Get-Content $_.FullName -TotalCount 1; if ($line -match "\b[\w]+\.[\w]+\b") { $matches[0] } } | Out-File "liste.txt"
