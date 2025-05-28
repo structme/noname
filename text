@@ -1,3 +1,65 @@
+$klasor = "C:\Senin\Klasor\Yolu"
+$listeDosyasi = "liste.txt"
+$eslesmeyenDosya = "eslesmeyenler.txt"
+
+# Önceki çıktı dosyasını temizle
+Remove-Item $eslesmeyenDosya -ErrorAction SilentlyContinue
+
+# liste.txt içeriğini satır satır oku
+$liste = Get-Content $listeDosyasi
+
+# Klasördeki tüm .prc dosyaları
+$dosyalar = Get-ChildItem -Path $klasor -Filter *.prc -Recurse
+
+
+foreach ($satir in $liste) {
+    $isimBuyuk = $satir.Trim()  # Örn: STAJER.PR_PROSEDÜRİSMİ
+
+    $parcalar = $isimBuyuk.Split('.')
+    if ($parcalar.Length -ne 2) {
+        Write-Host "Uyarı: Satır formatı uygun değil: $isimBuyuk"
+        continue
+    }
+
+    $schema = $parcalar[0]     #ŞEMA
+    $prosedurAdiBuyuk = $parcalar[1]  # PR_PROSEDÜRİSMİ
+
+    # Prosedür adını küçük harfe çevir (dosya adlarıyla tam eşleşme için)
+    $prosedurAdiKucuk = $prosedurAdiBuyuk.ToLower()
+
+    # Klasörde tam eşleşen dosya ara (dosya adı uzantısız, küçük harf)
+    $eslesenDosya = $dosyalar | Where-Object {
+        $_.BaseName.ToLower() -eq $prosedurAdiKucuk
+    }
+
+    if ($eslesenDosya) {
+        foreach ($d in $eslesenDosya) {
+            $yeniIsim = "$isimBuyuk.prc"  # Örn: STAJER.PR_PROSEDÜRİSMİ.prc
+            $yeniYol = Join-Path $d.DirectoryName $yeniIsim
+
+            if (-not (Test-Path $yeniYol)) {
+                Rename-Item -Path $d.FullName -NewName $yeniIsim
+                Write-Host "Dosya yeniden adlandırıldı: $($d.Name) -> $yeniIsim"
+            } else {
+                Write-Host "Uyarı: $yeniYol zaten var, atlandı."
+            }
+        }
+    } else {
+        Add-Content -Path $eslesmeyenDosya -Value $isimBuyuk
+        Write-Host "Eşleşen dosya bulunamadı: $isimBuyuk"
+    }
+}
+
+Write-Host "İşlem tamamlandı."
+
+
+
+
+
+
+
+
+
 @echo off
 REM multi_window_compare.bat - Çoklu pencere ile paralel karşılaştırma
 
@@ -56,15 +118,133 @@ for /l %%i in (1,1,%windows%) do (
     echo for /f "usebackq tokens=1,2 delims=." %%%%a in ^("liste_%%i.txt"^) do ^(
     echo     set /a count+=1
     echo     echo [%%i-!count!] %%%%a.%%%%b kontrol ediliyor...
-    echo     if exist "%procdir%\%%%%b.prc" ^(
+    echo     set "foundfile="
+    echo     for /r "%procdir%" %%%%f in (%%%%b.prc) do set "foundfile=%%%%f"
+    echo     if defined foundfile (
     echo         sqlplus -s %username%/%password%@%database% @exp_%%i.sql %%%%a %%%%b ^> temp_%%i.prc 2^>nul
-    echo         fc /b temp_%%i.prc "%procdir%\%%%%b.prc" ^>nul 2^>^&1
+    echo         fc /b temp_%%i.prc "!foundfile!" ^>nul 2^>^&1
     echo         if !errorlevel! neq 0 ^(
     echo             echo %%%%a.%%%%b ^>^> fark_%%i.txt
     echo             set /a different+=1
     echo         ^)
     echo         del temp_%%i.prc 2^>nul
-    echo     ^)
+    echo     ) else (
+    echo         echo %%%%a.%%%%b bulunamadi ^>^> fark_%%i.txt
+    echo         set /a different+=1
+    echo     )
+    echo ^)
+    echo.
+    echo echo Pencere %%i tamamlandi. Farkli: !different!
+    echo del exp_%%i.sql liste_%%i.txt 2^>nul
+    echo pause
+    ) > worker_%%i.bat
+
+    set /a start_line=!end_line!+1
+)
+
+echo.
+echo %windows% pencere aciliyor...
+echo.
+
+for /l %%i in (1,1,%windows%) do (
+    start "Pencere %%i" cmd /c worker_%%i.bat
+)
+
+echo Ana pencere: Tum pencereler kapaninca Enter'a basin...
+pause
+
+echo.
+echo Sonuclar birlestiriliyor...
+
+echo Birlestirilmis Fark Raporu > fark.txt
+echo ========================== >> fark.txt
+echo. >> fark.txt
+
+for /l %%i in (1,1,%windows%) do (
+    if exist fark_%%i.txt (
+        type fark_%%i.txt >> fark.txt
+        del fark_%%i.txt 2>nul
+    )
+)
+
+del worker_*.bat 2>nul
+
+echo.
+echo Islem tamamlandi!
+echo Sonuclar: fark.txt
+start notepad fark.txt
+@echo off
+REM multi_window_compare.bat - Çoklu pencere ile paralel karşılaştırma
+
+echo ====================================
+echo   Coklu Pencere Karsilastirma
+echo ====================================
+echo.
+
+set /p username=Oracle kullanici: 
+set /p password=Oracle sifre: 
+set /p database=Database: 
+set /p procdir=Prosedur dizini: 
+set /p windows=Kac pencere acilsin (varsayilan 4): 
+set /p listfile=Liste dosyasi (varsayilan: liste.txt): 
+
+if "%windows%"=="" set windows=4
+if "%listfile%"=="" set listfile=liste.txt
+
+REM Liste dosyasını parçalara böl
+echo Liste parcalaniyor...
+
+setlocal enabledelayedexpansion
+
+set /a total=0
+for /f "usebackq" %%a in ("%listfile%") do set /a total+=1
+
+set /a per_window=!total!/%windows%+1
+
+REM Her pencere için ayrı liste oluştur
+set /a start_line=0
+for /l %%i in (1,1,%windows%) do (
+    set /a end_line=!start_line!+%per_window%-1
+
+    powershell -Command "Get-Content '%listfile%' | Select-Object -Skip !start_line! -First %per_window%" > liste_%%i.txt
+
+    (
+    echo @echo off
+    echo echo Pencere %%i - [!start_line! - !end_line!] arasi kontrol ediliyor...
+    echo.
+    echo ^(
+    echo echo SET HEADING OFF
+    echo echo SET FEEDBACK OFF
+    echo echo SET PAGESIZE 0
+    echo echo SET LINESIZE 32767
+    echo echo SET TRIMSPOOL ON
+    echo echo SET TERMOUT OFF
+    echo echo SET LONG 1000000
+    echo echo SELECT text FROM all_source WHERE owner=UPPER('^&1'^) AND name=UPPER('^&2'^) AND type='PROCEDURE' ORDER BY line;
+    echo echo EXIT;
+    echo ^) ^> exp_%%i.sql
+    echo.
+    echo setlocal enabledelayedexpansion
+    echo set /a count=0
+    echo set /a different=0
+    echo.
+    echo for /f "usebackq tokens=1,2 delims=." %%%%a in ^("liste_%%i.txt"^) do ^(
+    echo     set /a count+=1
+    echo     echo [%%i-!count!] %%%%a.%%%%b kontrol ediliyor...
+    echo     set "foundfile="
+    echo     for /r "%procdir%" %%%%f in (%%%%b.prc) do set "foundfile=%%%%f"
+    echo     if defined foundfile (
+    echo         sqlplus -s %username%/%password%@%database% @exp_%%i.sql %%%%a %%%%b ^> temp_%%i.prc 2^>nul
+    echo         fc /b temp_%%i.prc "!foundfile!" ^>nul 2^>^&1
+    echo         if !errorlevel! neq 0 ^(
+    echo             echo %%%%a.%%%%b ^>^> fark_%%i.txt
+    echo             set /a different+=1
+    echo         ^)
+    echo         del temp_%%i.prc 2^>nul
+    echo     ) else (
+    echo         echo %%%%a.%%%%b bulunamadi ^>^> fark_%%i.txt
+    echo         set /a different+=1
+    echo     )
     echo ^)
     echo.
     echo echo Pencere %%i tamamlandi. Farkli: !different!
