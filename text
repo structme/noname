@@ -1,288 +1,284 @@
-$klasor = "C:\Senin\Klasor\Yolu"
-$listeDosyasi = "liste.txt"
-$eslesmeyenDosya = "eslesmeyenler.txt"
+# compare_procedures_parallel.ps1
+# Paralel çalışan, hem DB hem lokal kontrol yapan script
 
-# Önceki çıktı dosyasını temizle
-Remove-Item $eslesmeyenDosya -ErrorAction SilentlyContinue
+Clear-Host
+Write-Host "====================================" -ForegroundColor Cyan
+Write-Host "   Paralel Prosedur Karsilastirma" -ForegroundColor Cyan
+Write-Host "====================================" -ForegroundColor Cyan
+Write-Host ""
 
-# liste.txt içeriğini satır satır oku
-$liste = Get-Content $listeDosyasi
+# Kullanıcı bilgilerini al
+$username = Read-Host "Oracle kullanici"
+$password = Read-Host "Oracle sifre" -AsSecureString
+$password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($password))
+$database = Read-Host "Database"
+$procdir = Read-Host "Prosedur dizini"
+$parallel = Read-Host "Paralel thread sayisi (varsayilan: 10)"
 
-# Klasördeki tüm .prc dosyaları
-$dosyalar = Get-ChildItem -Path $klasor -Filter *.prc -Recurse
+if ([string]::IsNullOrWhiteSpace($parallel)) { $parallel = 10 }
 
+# Liste.txt'yi oku
+$procedures = Get-Content "liste.txt"
+$total = $procedures.Count
 
-foreach ($satir in $liste) {
-    $isimBuyuk = $satir.Trim()  # Örn: STAJER.PR_PROSEDÜRİSMİ
+Write-Host ""
+Write-Host "Toplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
+Write-Host "$parallel paralel thread ile calisacak." -ForegroundColor Yellow
+Write-Host ""
 
-    $parcalar = $isimBuyuk.Split('.')
-    if ($parcalar.Length -ne 2) {
-        Write-Host "Uyarı: Satır formatı uygun değil: $isimBuyuk"
-        continue
+# Export SQL oluştur
+$exportSQL = @"
+SET HEADING OFF
+SET FEEDBACK OFF
+SET PAGESIZE 0
+SET LINESIZE 32767
+SET TRIMSPOOL ON
+SET TERMOUT OFF
+SET LONG 1000000
+SET LONGCHUNKSIZE 32767
+SELECT text FROM all_source WHERE owner = UPPER('&1') AND name = UPPER('&2') AND type = 'PROCEDURE' ORDER BY line;
+EXIT;
+"@
+
+$exportSQL | Out-File -FilePath "exp.sql" -Encoding ASCII
+
+# Thread-safe koleksiyonlar
+$results = [System.Collections.Concurrent.ConcurrentBag[PSObject]]::new()
+$progressCounter = [System.Collections.Concurrent.ConcurrentDictionary[string,int]]::new()
+$progressCounter["processed"] = 0
+$progressCounter["same"] = 0
+$progressCounter["different"] = 0
+$progressCounter["notfound_db"] = 0
+$progressCounter["notfound_file"] = 0
+$progressCounter["notfound_both"] = 0
+
+# Progress gösterme job'ı
+$progressJob = Start-Job -ScriptBlock {
+    param($total)
+    while ($true) {
+        $processed = $using:progressCounter["processed"]
+        $same = $using:progressCounter["same"]
+        $different = $using:progressCounter["different"]
+        $notfound_db = $using:progressCounter["notfound_db"]
+        $notfound_file = $using:progressCounter["notfound_file"]
+        $notfound_both = $using:progressCounter["notfound_both"]
+        
+        if ($processed -gt 0) {
+            $percent = [math]::Round(($processed / $total) * 100)
+            $status = "[$processed/$total] %$percent | Ayni: $same | Farkli: $different | Sadece DB: $notfound_file | Sadece Lokal: $notfound_db | Hic Yok: $notfound_both"
+            Write-Host "`r$status" -NoNewline
+        }
+        
+        if ($processed -eq $total) { break }
+        Start-Sleep -Milliseconds 100
     }
+} -ArgumentList $total
 
-    $schema = $parcalar[0]     #ŞEMA
-    $prosedurAdiBuyuk = $parcalar[1]  # PR_PROSEDÜRİSMİ
+# Ana işlem - Paralel
+$startTime = Get-Date
 
-    # Prosedür adını küçük harfe çevir (dosya adlarıyla tam eşleşme için)
-    $prosedurAdiKucuk = $prosedurAdiBuyuk.ToLower()
-
-    # Klasörde tam eşleşen dosya ara (dosya adı uzantısız, küçük harf)
-    $eslesenDosya = $dosyalar | Where-Object {
-        $_.BaseName.ToLower() -eq $prosedurAdiKucuk
+$procedures | ForEach-Object -Parallel {
+    $line = $_
+    $parts = $line.Split('.')
+    
+    if ($parts.Count -ne 2) { 
+        $using:results.Add([PSCustomObject]@{
+            Schema = "HATA"
+            Procedure = $line
+            Status = "YANLIS_FORMAT"
+            Details = "Satir formati SCHEMA.PROCEDURE olmali"
+        })
+        $using:progressCounter["processed"]++
+        return
     }
-
-    if ($eslesenDosya) {
-        foreach ($d in $eslesenDosya) {
-            $yeniIsim = "$isimBuyuk.prc"  # Örn: STAJER.PR_PROSEDÜRİSMİ.prc
-            $yeniYol = Join-Path $d.DirectoryName $yeniIsim
-
-            if (-not (Test-Path $yeniYol)) {
-                Rename-Item -Path $d.FullName -NewName $yeniIsim
-                Write-Host "Dosya yeniden adlandırıldı: $($d.Name) -> $yeniIsim"
-            } else {
-                Write-Host "Uyarı: $yeniYol zaten var, atlandı."
+    
+    $schema = $parts[0]
+    $procname = $parts[1]
+    $localFile = "$using:procdir\$procname.prc"
+    $tempFile = "temp_$procname`_$([guid]::NewGuid().ToString('N').Substring(0,8)).prc"
+    
+    try {
+        # DB'den export et
+        $exportResult = & sqlplus -s "$using:username/$using:password@$using:database" @exp.sql $schema $procname 2>$null
+        $exportResult | Out-File -FilePath $tempFile -Encoding ASCII
+        
+        # DB kontrolü - dosya boş mu?
+        $tempFileInfo = Get-Item $tempFile -ErrorAction SilentlyContinue
+        $dbExists = $tempFileInfo -and $tempFileInfo.Length -gt 0
+        
+        # Lokal dosya kontrolü
+        $localExists = Test-Path $localFile
+        
+        # Durum belirleme
+        if (-not $dbExists -and -not $localExists) {
+            $status = "HIC_YOK"
+            $details = "Hem DB'de hem lokalde yok"
+            $using:progressCounter["notfound_both"]++
+        }
+        elseif (-not $dbExists) {
+            $status = "SADECE_LOKAL"
+            $details = "DB'de yok, sadece lokalde var"
+            $using:progressCounter["notfound_db"]++
+        }
+        elseif (-not $localExists) {
+            $status = "SADECE_DB"
+            $details = "Lokalde yok, sadece DB'de var"
+            $using:progressCounter["notfound_file"]++
+        }
+        else {
+            # Her ikisi de var, karşılaştır
+            $dbContent = Get-Content $tempFile -Raw
+            $fileContent = Get-Content $localFile -Raw
+            
+            # Satır sonu farklarını normalize et
+            $dbContent = $dbContent -replace "`r`n", "`n" -replace "`r", "`n"
+            $fileContent = $fileContent -replace "`r`n", "`n" -replace "`r", "`n"
+            
+            if ($dbContent.Trim() -eq $fileContent.Trim()) {
+                $status = "AYNI"
+                $details = "Icerikler birebir ayni"
+                $using:progressCounter["same"]++
+            }
+            else {
+                $status = "FARKLI"
+                $dbSize = $dbContent.Length
+                $fileSize = $fileContent.Length
+                $details = "DB: $dbSize byte, Lokal: $fileSize byte"
+                $using:progressCounter["different"]++
             }
         }
-    } else {
-        Add-Content -Path $eslesmeyenDosya -Value $isimBuyuk
-        Write-Host "Eşleşen dosya bulunamadı: $isimBuyuk"
+        
+        # Sonucu ekle
+        $using:results.Add([PSCustomObject]@{
+            Schema = $schema
+            Procedure = $procname
+            Status = $status
+            Details = $details
+        })
+    }
+    catch {
+        $using:results.Add([PSCustomObject]@{
+            Schema = $schema
+            Procedure = $procname
+            Status = "HATA"
+            Details = $_.Exception.Message
+        })
+    }
+    finally {
+        # Temp dosyayı sil
+        if (Test-Path $tempFile) {
+            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        }
+        $using:progressCounter["processed"]++
+    }
+} -ThrottleLimit $parallel
+
+# Progress job'ını bekle
+Wait-Job $progressJob | Out-Null
+Remove-Job $progressJob
+
+$endTime = Get-Date
+$duration = $endTime - $startTime
+
+Write-Host "`n`n"
+
+# Sonuçları grupla
+$grouped = $results.ToArray() | Group-Object Status
+
+# Fark.txt oluştur
+$farkContent = @"
+Paralel Prosedur Karsilastirma Raporu
+Tarih: $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
+Toplam Sure: $($duration.TotalSeconds) saniye
+Thread Sayisi: $parallel
+=====================================
+
+"@
+
+# Kategorilere göre listele
+$categories = @(
+    @{Name="FARKLI OLANLAR"; Status="FARKLI"; Color="Red"},
+    @{Name="SADECE DB'DE OLANLAR"; Status="SADECE_DB"; Color="Yellow"},
+    @{Name="SADECE LOKALDE OLANLAR"; Status="SADECE_LOKAL"; Color="Yellow"},
+    @{Name="HIC BULUNMAYANLAR"; Status="HIC_YOK"; Color="DarkRed"},
+    @{Name="HATALI OLANLAR"; Status="HATA"; Color="Magenta"}
+)
+
+foreach ($category in $categories) {
+    $items = $results.ToArray() | Where-Object { $_.Status -eq $category.Status } | Sort-Object Schema, Procedure
+    if ($items) {
+        $farkContent += "`n$($category.Name):`n"
+        $farkContent += "=" * $category.Name.Length + "`n"
+        foreach ($item in $items) {
+            $farkContent += "$($item.Schema).$($item.Procedure) - $($item.Details)`n"
+        }
     }
 }
 
-Write-Host "İşlem tamamlandı."
+# Özet ekle
+$farkContent += @"
 
+===== OZET =====
+Toplam: $total
+Ayni: $($progressCounter["same"])
+Farkli: $($progressCounter["different"])
+Sadece DB'de: $($progressCounter["notfound_file"])
+Sadece Lokalde: $($progressCounter["notfound_db"])
+Hic Yok: $($progressCounter["notfound_both"])
+Sure: $($duration.TotalSeconds) saniye
+Thread: $parallel
+"@
 
+$farkContent | Out-File -FilePath "fark.txt" -Encoding UTF8
 
+# Temizlik
+Remove-Item "exp.sql" -Force -ErrorAction SilentlyContinue
 
+# Özet rapor
+Write-Host "====================================" -ForegroundColor Green
+Write-Host "          OZET RAPOR" -ForegroundColor Green
+Write-Host "====================================" -ForegroundColor Green
+Write-Host "Toplam kontrol edilen: $total"
+Write-Host "Ayni olan: $($progressCounter["same"])" -ForegroundColor Green
+Write-Host "Farkli olan: $($progressCounter["different"])" -ForegroundColor Red
+Write-Host "Sadece DB'de: $($progressCounter["notfound_file"])" -ForegroundColor Yellow
+Write-Host "Sadece Lokalde: $($progressCounter["notfound_db"])" -ForegroundColor Yellow
+Write-Host "Hic bulunamayan: $($progressCounter["notfound_both"])" -ForegroundColor DarkRed
+Write-Host "====================================" -ForegroundColor Green
+Write-Host "Toplam sure: $($duration.TotalSeconds) saniye" -ForegroundColor Cyan
+Write-Host "Thread sayisi: $parallel" -ForegroundColor Cyan
+Write-Host "====================================" -ForegroundColor Green
 
+# Detaylı gösterim
+foreach ($category in $categories) {
+    $items = $results.ToArray() | Where-Object { $_.Status -eq $category.Status } | Sort-Object Schema, Procedure
+    if ($items) {
+        Write-Host "`n$($category.Name):" -ForegroundColor $category.Color
+        Write-Host ("-" * $category.Name.Length)
+        $items | Select-Object -First 5 | ForEach-Object {
+            Write-Host "$($_.Schema).$($_.Procedure)" -ForegroundColor $category.Color
+        }
+        if ($items.Count -gt 5) {
+            Write-Host "... ve $($items.Count - 5) tane daha" -ForegroundColor Gray
+        }
+    }
+}
 
+Write-Host "`nTum detaylar 'fark.txt' dosyasina kaydedildi." -ForegroundColor Yellow
 
+# Excel raporu oluştur (opsiyonel)
+$excelData = $results.ToArray() | Select-Object Schema, Procedure, Status, Details
+$excelData | Export-Csv -Path "karsilastirma_raporu.csv" -NoTypeInformation -Encoding UTF8
 
+Write-Host "Excel raporu 'karsilastirma_raporu.csv' olarak kaydedildi." -ForegroundColor Yellow
 
-@echo off
-REM multi_window_compare.bat - Çoklu pencere ile paralel karşılaştırma
+Write-Host ""
+Read-Host "Devam etmek icin Enter'a basin"
 
-echo ====================================
-echo   Coklu Pencere Karsilastirma
-echo ====================================
-echo.
-
-set /p username=Oracle kullanici: 
-set /p password=Oracle sifre: 
-set /p database=Database: 
-set /p procdir=Prosedur dizini: 
-set /p windows=Kac pencere acilsin (varsayilan 4): 
-set /p listfile=Liste dosyasi (varsayilan: liste.txt): 
-
-if "%windows%"=="" set windows=4
-if "%listfile%"=="" set listfile=liste.txt
-
-REM Liste dosyasını parçalara böl
-echo Liste parcalaniyor...
-
-setlocal enabledelayedexpansion
-
-set /a total=0
-for /f "usebackq" %%a in ("%listfile%") do set /a total+=1
-
-set /a per_window=!total!/%windows%+1
-
-REM Her pencere için ayrı liste oluştur
-set /a start_line=0
-for /l %%i in (1,1,%windows%) do (
-    set /a end_line=!start_line!+%per_window%-1
-
-    powershell -Command "Get-Content '%listfile%' | Select-Object -Skip !start_line! -First %per_window%" > liste_%%i.txt
-
-    (
-    echo @echo off
-    echo echo Pencere %%i - [!start_line! - !end_line!] arasi kontrol ediliyor...
-    echo.
-    echo ^(
-    echo echo SET HEADING OFF
-    echo echo SET FEEDBACK OFF
-    echo echo SET PAGESIZE 0
-    echo echo SET LINESIZE 32767
-    echo echo SET TRIMSPOOL ON
-    echo echo SET TERMOUT OFF
-    echo echo SET LONG 1000000
-    echo echo SELECT text FROM all_source WHERE owner=UPPER('^&1'^) AND name=UPPER('^&2'^) AND type='PROCEDURE' ORDER BY line;
-    echo echo EXIT;
-    echo ^) ^> exp_%%i.sql
-    echo.
-    echo setlocal enabledelayedexpansion
-    echo set /a count=0
-    echo set /a different=0
-    echo.
-    echo for /f "usebackq tokens=1,2 delims=." %%%%a in ^("liste_%%i.txt"^) do ^(
-    echo     set /a count+=1
-    echo     echo [%%i-!count!] %%%%a.%%%%b kontrol ediliyor...
-    echo     set "foundfile="
-    echo     for /r "%procdir%" %%%%f in (%%%%b.prc) do set "foundfile=%%%%f"
-    echo     if defined foundfile (
-    echo         sqlplus -s %username%/%password%@%database% @exp_%%i.sql %%%%a %%%%b ^> temp_%%i.prc 2^>nul
-    echo         fc /b temp_%%i.prc "!foundfile!" ^>nul 2^>^&1
-    echo         if !errorlevel! neq 0 ^(
-    echo             echo %%%%a.%%%%b ^>^> fark_%%i.txt
-    echo             set /a different+=1
-    echo         ^)
-    echo         del temp_%%i.prc 2^>nul
-    echo     ) else (
-    echo         echo %%%%a.%%%%b bulunamadi ^>^> fark_%%i.txt
-    echo         set /a different+=1
-    echo     )
-    echo ^)
-    echo.
-    echo echo Pencere %%i tamamlandi. Farkli: !different!
-    echo del exp_%%i.sql liste_%%i.txt 2^>nul
-    echo pause
-    ) > worker_%%i.bat
-
-    set /a start_line=!end_line!+1
-)
-
-echo.
-echo %windows% pencere aciliyor...
-echo.
-
-for /l %%i in (1,1,%windows%) do (
-    start "Pencere %%i" cmd /c worker_%%i.bat
-)
-
-echo Ana pencere: Tum pencereler kapaninca Enter'a basin...
-pause
-
-echo.
-echo Sonuclar birlestiriliyor...
-
-echo Birlestirilmis Fark Raporu > fark.txt
-echo ========================== >> fark.txt
-echo. >> fark.txt
-
-for /l %%i in (1,1,%windows%) do (
-    if exist fark_%%i.txt (
-        type fark_%%i.txt >> fark.txt
-        del fark_%%i.txt 2>nul
-    )
-)
-
-del worker_*.bat 2>nul
-
-echo.
-echo Islem tamamlandi!
-echo Sonuclar: fark.txt
-start notepad fark.txt
-@echo off
-REM multi_window_compare.bat - Çoklu pencere ile paralel karşılaştırma
-
-echo ====================================
-echo   Coklu Pencere Karsilastirma
-echo ====================================
-echo.
-
-set /p username=Oracle kullanici: 
-set /p password=Oracle sifre: 
-set /p database=Database: 
-set /p procdir=Prosedur dizini: 
-set /p windows=Kac pencere acilsin (varsayilan 4): 
-set /p listfile=Liste dosyasi (varsayilan: liste.txt): 
-
-if "%windows%"=="" set windows=4
-if "%listfile%"=="" set listfile=liste.txt
-
-REM Liste dosyasını parçalara böl
-echo Liste parcalaniyor...
-
-setlocal enabledelayedexpansion
-
-set /a total=0
-for /f "usebackq" %%a in ("%listfile%") do set /a total+=1
-
-set /a per_window=!total!/%windows%+1
-
-REM Her pencere için ayrı liste oluştur
-set /a start_line=0
-for /l %%i in (1,1,%windows%) do (
-    set /a end_line=!start_line!+%per_window%-1
-
-    powershell -Command "Get-Content '%listfile%' | Select-Object -Skip !start_line! -First %per_window%" > liste_%%i.txt
-
-    (
-    echo @echo off
-    echo echo Pencere %%i - [!start_line! - !end_line!] arasi kontrol ediliyor...
-    echo.
-    echo ^(
-    echo echo SET HEADING OFF
-    echo echo SET FEEDBACK OFF
-    echo echo SET PAGESIZE 0
-    echo echo SET LINESIZE 32767
-    echo echo SET TRIMSPOOL ON
-    echo echo SET TERMOUT OFF
-    echo echo SET LONG 1000000
-    echo echo SELECT text FROM all_source WHERE owner=UPPER('^&1'^) AND name=UPPER('^&2'^) AND type='PROCEDURE' ORDER BY line;
-    echo echo EXIT;
-    echo ^) ^> exp_%%i.sql
-    echo.
-    echo setlocal enabledelayedexpansion
-    echo set /a count=0
-    echo set /a different=0
-    echo.
-    echo for /f "usebackq tokens=1,2 delims=." %%%%a in ^("liste_%%i.txt"^) do ^(
-    echo     set /a count+=1
-    echo     echo [%%i-!count!] %%%%a.%%%%b kontrol ediliyor...
-    echo     set "foundfile="
-    echo     for /r "%procdir%" %%%%f in (%%%%b.prc) do set "foundfile=%%%%f"
-    echo     if defined foundfile (
-    echo         sqlplus -s %username%/%password%@%database% @exp_%%i.sql %%%%a %%%%b ^> temp_%%i.prc 2^>nul
-    echo         fc /b temp_%%i.prc "!foundfile!" ^>nul 2^>^&1
-    echo         if !errorlevel! neq 0 ^(
-    echo             echo %%%%a.%%%%b ^>^> fark_%%i.txt
-    echo             set /a different+=1
-    echo         ^)
-    echo         del temp_%%i.prc 2^>nul
-    echo     ) else (
-    echo         echo %%%%a.%%%%b bulunamadi ^>^> fark_%%i.txt
-    echo         set /a different+=1
-    echo     )
-    echo ^)
-    echo.
-    echo echo Pencere %%i tamamlandi. Farkli: !different!
-    echo del exp_%%i.sql liste_%%i.txt 2^>nul
-    echo pause
-    ) > worker_%%i.bat
-
-    set /a start_line=!end_line!+1
-)
-
-echo.
-echo %windows% pencere aciliyor...
-echo.
-
-for /l %%i in (1,1,%windows%) do (
-    start "Pencere %%i" cmd /c worker_%%i.bat
-)
-
-echo Ana pencere: Tum pencereler kapaninca Enter'a basin...
-pause
-
-echo.
-echo Sonuclar birlestiriliyor...
-
-echo Birlestirilmis Fark Raporu > fark.txt
-echo ========================== >> fark.txt
-echo. >> fark.txt
-
-for /l %%i in (1,1,%windows%) do (
-    if exist fark_%%i.txt (
-        type fark_%%i.txt >> fark.txt
-        del fark_%%i.txt 2>nul
-    )
-)
-
-del worker_*.bat 2>nul
-
-echo.
-echo Islem tamamlandi!
-echo Sonuclar: fark.txt
-start notepad fark.txt
+# Fark.txt'yi aç
+if ($progressCounter["different"] -gt 0 -or $progressCounter["notfound_file"] -gt 0 -or $progressCounter["notfound_db"] -gt 0) {
+    $openFile = Read-Host "Fark.txt dosyasini acmak ister misiniz? (E/H)"
+    if ($openFile -eq 'E' -or $openFile -eq 'e') {
+        Start-Process notepad.exe fark.txt
+    }
+}
