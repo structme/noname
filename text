@@ -1,28 +1,18 @@
-# compare_procedures.ps1
-# PowerShell script ile daha güzel ilerleme göstergesi
+# simple_compare.ps1 - Basit ama hızlı karşılaştırma
 
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
-Write-Host "   Hizli Prosedur Karsilastirma" -ForegroundColor Cyan
+Write-Host "   Prosedur Karsilastirma (Basit)" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Kullanıcı bilgilerini al
+# Kullanıcı bilgileri
 $username = Read-Host "Oracle kullanici"
-$password = Read-Host "Oracle sifre" -AsSecureString
-$password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($password))
+$password = Read-Host "Oracle sifre"
 $database = Read-Host "Database"
 $procdir = Read-Host "Prosedur dizini"
 
-# Liste.txt'yi oku
-$procedures = Get-Content "liste.txt"
-$total = $procedures.Count
-
-Write-Host ""
-Write-Host "Toplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
-Write-Host ""
-
-# Export SQL oluştur
+# Export SQL
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
@@ -35,102 +25,108 @@ SELECT text FROM all_source WHERE owner = UPPER('&1') AND name = UPPER('&2') AND
 EXIT;
 "@ | Out-File -FilePath "exp.sql" -Encoding ASCII
 
-# Sonuç değişkenleri
-$count = 0
+# Liste oku
+$procedures = Get-Content "liste.txt"
+$total = $procedures.Count
+
+Write-Host "`nToplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
+Write-Host ""
+
+# Sonuç listeleri
+$farkList = @()
 $same = 0
 $different = 0
-$notfound = 0
-$farkList = @()
+$notfound_db = 0
+$notfound_file = 0
 
-# İlerleme göster
+# Ana döngü
+$count = 0
 foreach ($line in $procedures) {
     $count++
     $parts = $line.Split('.')
+    
+    if ($parts.Count -ne 2) { continue }
+    
     $schema = $parts[0]
     $procname = $parts[1]
     
-    # İlerleme çubuğu
-    $percent = [math]::Round(($count / $total) * 100)
-    Write-Progress -Activity "Prosedurler kontrol ediliyor..." `
-                   -Status "[${count}/${total}] $schema.$procname | Ayni: $same - Farkli: $different - Dosya Yok: $notfound" `
-                   -PercentComplete $percent
+    # İlerleme
+    Write-Host "`r[$count/$total] $schema.$procname kontrol ediliyor...                    " -NoNewline
     
-    # Dosya kontrolü
-    if (Test-Path "$procdir\$procname.prc") {
-        # DB'den export et
-        & sqlplus -s "$username/$password@$database" @exp.sql $schema $procname > temp.prc 2>$null
-        
-        # Karşılaştır
-        $dbContent = Get-Content "temp.prc" -Raw
-        $fileContent = Get-Content "$procdir\$procname.prc" -Raw
-        
-        if ($dbContent -eq $fileContent) {
-            $same++
-        } else {
-            $different++
-            $farkList += "$schema.$procname"
-        }
-        
-        Remove-Item "temp.prc" -Force -ErrorAction SilentlyContinue
-    } else {
-        $notfound++
-        $farkList += "$schema.$procname - DOSYA YOK"
+    $localFile = "$procdir\$procname.prc"
+    
+    # Lokal dosya var mı?
+    if (-not (Test-Path $localFile)) {
+        $farkList += "$schema.$procname - LOKAL DOSYA YOK"
+        $notfound_file++
+        continue
     }
+    
+    # DB'den export
+    & sqlplus -s "$username/$password@$database" @exp.sql $schema $procname > temp.prc 2>$null
+    
+    # DB'de var mı?
+    if ((Get-Item temp.prc).Length -eq 0) {
+        $farkList += "$schema.$procname - DB'DE YOK"
+        $notfound_db++
+        Remove-Item temp.prc
+        continue
+    }
+    
+    # İçerik karşılaştır
+    $dbContent = Get-Content temp.prc -Raw
+    $fileContent = Get-Content $localFile -Raw
+    
+    if ($dbContent.Trim() -ne $fileContent.Trim()) {
+        $farkList += "$schema.$procname - FARKLI"
+        $different++
+    } else {
+        $same++
+    }
+    
+    Remove-Item temp.prc
 }
 
-# İlerleme çubuğunu kaldır
-Write-Progress -Activity "Prosedurler kontrol ediliyor..." -Completed
+Write-Host "`r                                                                           "
 
-# Fark.txt oluştur
-$farkContent = @"
-Farkli Prosedurler Listesi
+# Rapor oluştur
+@"
+Prosedur Karsilastirma Raporu
 Tarih: $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
-================================
+=============================
 
 $($farkList -join "`n")
 
 ===== OZET =====
-Toplam: $count
+Toplam: $total
 Ayni: $same
 Farkli: $different
-Dosya yok: $notfound
-"@
-
-$farkContent | Out-File -FilePath "fark.txt" -Encoding UTF8
+DB'de Yok: $notfound_db
+Dosya Yok: $notfound_file
+"@ | Out-File -FilePath "fark.txt" -Encoding UTF8
 
 # Temizlik
-Remove-Item "exp.sql" -Force -ErrorAction SilentlyContinue
+Remove-Item "exp.sql" -Force
 
-# Özet rapor
+# Özet
 Write-Host ""
 Write-Host "====================================" -ForegroundColor Green
 Write-Host "          OZET RAPOR" -ForegroundColor Green
 Write-Host "====================================" -ForegroundColor Green
-Write-Host "Toplam kontrol edilen: $count"
-Write-Host "Ayni olan: $same" -ForegroundColor Green
-Write-Host "Farkli olan: $different" -ForegroundColor Red
-Write-Host "Dosya bulunamayan: $notfound" -ForegroundColor Yellow
+Write-Host "Toplam: $total"
+Write-Host "Ayni: $same" -ForegroundColor Green
+Write-Host "Farkli: $different" -ForegroundColor Red
+Write-Host "DB'de Yok: $notfound_db" -ForegroundColor Yellow
+Write-Host "Dosya Yok: $notfound_file" -ForegroundColor Yellow
 Write-Host "====================================" -ForegroundColor Green
 
-if ($different -gt 0 -or $notfound -gt 0) {
-    Write-Host ""
-    Write-Host "Farkli ve bulunamayan prosedurler 'fark.txt' dosyasina kaydedildi." -ForegroundColor Yellow
+if ($farkList.Count -gt 0) {
+    Write-Host "`nFarkli/eksik prosedurler 'fark.txt' dosyasina kaydedildi." -ForegroundColor Yellow
     
-    if ($different -gt 0) {
-        Write-Host ""
-        Write-Host "FARKLI PROSEDURLER:" -ForegroundColor Red
-        Write-Host "-------------------"
-        $farkList | Where-Object { $_ -notlike "*DOSYA YOK*" } | ForEach-Object { Write-Host $_ }
-    }
-}
-
-Write-Host ""
-Read-Host "Devam etmek icin Enter'a basin"
-
-# Fark.txt'yi aç
-if ($different -gt 0 -or $notfound -gt 0) {
-    $openFile = Read-Host "Fark.txt dosyasini acmak ister misiniz? (E/H)"
-    if ($openFile -eq 'E' -or $openFile -eq 'e') {
+    $open = Read-Host "`nFark.txt'yi acmak ister misiniz? (E/H)"
+    if ($open -eq 'E') {
         Start-Process notepad.exe fark.txt
     }
 }
+
+Read-Host "`nCikmak icin Enter'a basin"
