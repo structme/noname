@@ -1,4 +1,4 @@
-# compare_simple_fixed.ps1 - @ işareti düzeltilmiş versiyon
+# path_test_compare.ps1 - Yol kontrolü eklenmiş versiyon
 
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
@@ -10,10 +10,83 @@ Write-Host ""
 $username = Read-Host "Oracle kullanici"
 $password = Read-Host "Oracle sifre"
 $database = Read-Host "Database"
-$procdir = Read-Host "Prosedur dizini"
 
-# Export SQL dosyası oluştur
-$sqlContent = @"
+# Prosedür dizini - örneklerle
+Write-Host "`nProsedur dizini ornekleri:" -ForegroundColor Yellow
+Write-Host "  C:\prosedurler" -ForegroundColor Gray
+Write-Host "  C:\Users\kullanici\Desktop\prosedurler" -ForegroundColor Gray
+Write-Host "  \\sunucu\paylasim\prosedurler" -ForegroundColor Gray
+Write-Host "  ." -ForegroundColor Gray -NoNewline
+Write-Host " (mevcut dizin)" -ForegroundColor DarkGray
+
+$procdir = Read-Host "`nProsedur dizini"
+
+# Dizin kontrolü
+if (-not (Test-Path $procdir)) {
+    Write-Host "`nHATA: Belirtilen dizin bulunamadi!" -ForegroundColor Red
+    Write-Host "Girilen yol: $procdir" -ForegroundColor Yellow
+    
+    # Alternatif yollar dene
+    $alternativePaths = @(
+        $procdir,
+        (Join-Path $PWD $procdir),
+        (Join-Path $env:USERPROFILE $procdir),
+        (Join-Path "C:\" $procdir)
+    )
+    
+    Write-Host "`nAlternatif yollar deneniyor..." -ForegroundColor Yellow
+    foreach ($altPath in $alternativePaths) {
+        if (Test-Path $altPath) {
+            Write-Host "Bulundu: $altPath" -ForegroundColor Green
+            $procdir = $altPath
+            break
+        }
+    }
+    
+    if (-not (Test-Path $procdir)) {
+        Write-Host "`nDizin bulunamadi. Cikilyor..." -ForegroundColor Red
+        Read-Host "Enter'a basin"
+        exit
+    }
+}
+
+# Dizin bilgilerini göster
+Write-Host "`nKullanilacak dizin: $procdir" -ForegroundColor Green
+$prcFiles = Get-ChildItem -Path $procdir -Filter "*.prc" -ErrorAction SilentlyContinue
+Write-Host "Dizinde bulunan .prc dosya sayisi: $($prcFiles.Count)" -ForegroundColor Cyan
+
+if ($prcFiles.Count -gt 0) {
+    Write-Host "Ilk 5 dosya:" -ForegroundColor Gray
+    $prcFiles | Select-Object -First 5 | ForEach-Object {
+        Write-Host "  - $($_.Name)" -ForegroundColor DarkGray
+    }
+}
+
+# Liste.txt'den örnek göster
+if (Test-Path "liste.txt") {
+    Write-Host "`nliste.txt'den ilk 5 satir:" -ForegroundColor Yellow
+    Get-Content "liste.txt" | Select-Object -First 5 | ForEach-Object {
+        $parts = $_.Split('.')
+        if ($parts.Count -eq 2) {
+            $testFile = Join-Path $procdir "$($parts[1]).prc"
+            if (Test-Path $testFile) {
+                Write-Host "  $_" -ForegroundColor Green -NoNewline
+                Write-Host " [DOSYA VAR]" -ForegroundColor DarkGreen
+            } else {
+                Write-Host "  $_" -ForegroundColor Red -NoNewline
+                Write-Host " [DOSYA YOK: $testFile]" -ForegroundColor DarkRed
+            }
+        }
+    }
+}
+
+$continue = Read-Host "`nDevam etmek istiyor musunuz? (E/H)"
+if ($continue -ne 'E' -and $continue -ne 'e') {
+    exit
+}
+
+# Export SQL
+@"
 SET HEADING OFF
 SET FEEDBACK OFF
 SET PAGESIZE 0
@@ -21,25 +94,20 @@ SET LINESIZE 32767
 SET TRIMSPOOL ON
 SET TERMOUT OFF
 SET LONG 1000000
-SET LONGCHUNKSIZE 32767
 SELECT text FROM all_source WHERE owner = UPPER('&1') AND name = UPPER('&2') AND type = 'PROCEDURE' ORDER BY line;
 EXIT;
-"@
-
-$sqlContent | Out-File -FilePath "exp.sql" -Encoding ASCII
+"@ | Out-File -FilePath "exp.sql" -Encoding ASCII
 
 # Liste oku
-if (-not (Test-Path "liste.txt")) {
-    Write-Host "HATA: liste.txt dosyasi bulunamadi!" -ForegroundColor Red
-    Read-Host "Cikmak icin Enter"
-    exit
-}
-
 $procedures = Get-Content "liste.txt"
 $total = $procedures.Count
 
 Write-Host "`nToplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
 Write-Host ""
+
+# Debug modu
+$debug = Read-Host "Debug modu acilsin mi? (E/H)"
+$debugMode = ($debug -eq 'E' -or $debug -eq 'e')
 
 # Sonuç listeleri
 $farkList = @()
@@ -47,77 +115,76 @@ $same = 0
 $different = 0
 $notfound_db = 0
 $notfound_file = 0
-$errors = 0
-
-# Başlangıç zamanı
-$startTime = Get-Date
 
 # Ana döngü
 $count = 0
 foreach ($line in $procedures) {
     $count++
     
-    # Boş satırları atla
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
     
     $parts = $line.Split('.')
-    
-    if ($parts.Count -ne 2) { 
-        Write-Host "HATA: Yanlis format - $line" -ForegroundColor Red
-        $errors++
-        continue 
-    }
+    if ($parts.Count -ne 2) { continue }
     
     $schema = $parts[0].Trim()
     $procname = $parts[1].Trim()
     
-    # İlerleme göster
-    $percent = [math]::Round(($count / $total) * 100)
-    Write-Host "`r[$count/$total] %$percent - $schema.$procname kontrol ediliyor...                    " -NoNewline
-    
+    # Dosya yolunu oluştur
     $localFile = Join-Path $procdir "$procname.prc"
     
-    # Lokal dosya var mı?
-    if (-not (Test-Path $localFile)) {
-        $farkList += "$schema.$procname - LOKAL DOSYA YOK"
-        $notfound_file++
-        continue
+    if ($debugMode -and $count -le 5) {
+        Write-Host "`nDEBUG: Kontrol ediliyor: $schema.$procname" -ForegroundColor Magenta
+        Write-Host "  Aranan dosya: $localFile" -ForegroundColor DarkMagenta
+        Write-Host "  Dosya var mi: $(Test-Path $localFile)" -ForegroundColor DarkMagenta
     }
     
-    # SQLPlus çalıştır - @ işaretini doğru kullan
-    $tempFile = "temp_$procname.prc"
+    # İlerleme
+    if (-not $debugMode) {
+        Write-Host "`r[$count/$total] $schema.$procname kontrol ediliyor...                    " -NoNewline
+    }
     
-    try {
-        # SQLPlus komutunu oluştur
-        $sqlplusCmd = "sqlplus"
-        $sqlplusArgs = @(
-            "-s",
-            "$username/$password@$database",
-            "@exp.sql",
-            $schema,
-            $procname
+    # Lokal dosya kontrolü
+    if (-not (Test-Path $localFile)) {
+        $farkList += "$schema.$procname - LOKAL DOSYA YOK [$localFile]"
+        $notfound_file++
+        
+        # Alternatif isimler dene
+        $altNames = @(
+            "$procname.prc",
+            "$procname.PRC",
+            "$($procname.ToLower()).prc",
+            "$($procname.ToUpper()).prc",
+            "$schema.$procname.prc"
         )
         
-        # Process başlat ve çıktıyı yakala
-        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pinfo.FileName = $sqlplusCmd
-        $pinfo.Arguments = $sqlplusArgs -join " "
-        $pinfo.RedirectStandardOutput = $true
-        $pinfo.RedirectStandardError = $true
-        $pinfo.UseShellExecute = $false
-        $pinfo.CreateNoWindow = $true
+        $found = $false
+        foreach ($altName in $altNames) {
+            $altPath = Join-Path $procdir $altName
+            if (Test-Path $altPath) {
+                if ($debugMode) {
+                    Write-Host "  ALTERNATIF BULUNDU: $altPath" -ForegroundColor Yellow
+                }
+                $localFile = $altPath
+                $found = $true
+                break
+            }
+        }
         
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $pinfo
-        [void]$process.Start()
+        if (-not $found) {
+            continue
+        }
+    }
+    
+    # DB'den export et
+    try {
+        $tempFile = "temp_$procname.prc"
         
-        $output = $process.StandardOutput.ReadToEnd()
-        $process.WaitForExit()
+        # SQLPlus çalıştır
+        $process = Start-Process -FilePath "sqlplus" `
+            -ArgumentList "-s", "$username/$password@$database", "@exp.sql", $schema, $procname `
+            -NoNewWindow -Wait -RedirectStandardOutput $tempFile -PassThru
         
-        # Çıktıyı dosyaya yaz
-        $output | Out-File -FilePath $tempFile -Encoding ASCII
-        
-        # DB'de var mı kontrol
+        # DB kontrolü
         if ((Get-Item $tempFile -ErrorAction SilentlyContinue).Length -eq 0) {
             $farkList += "$schema.$procname - DB'DE YOK"
             $notfound_db++
@@ -127,48 +194,34 @@ foreach ($line in $procedures) {
             $dbContent = Get-Content $tempFile -Raw
             $fileContent = Get-Content $localFile -Raw
             
-            # Satır sonu karakterlerini normalize et
+            # Normalize et
             $dbContent = $dbContent -replace "`r`n", "`n" -replace "`r", "`n"
             $fileContent = $fileContent -replace "`r`n", "`n" -replace "`r", "`n"
             
             if ($dbContent.Trim() -ne $fileContent.Trim()) {
-                $dbSize = $dbContent.Length
-                $fileSize = $fileContent.Length
-                $farkList += "$schema.$procname - FARKLI (DB: $dbSize byte, Lokal: $fileSize byte)"
+                $farkList += "$schema.$procname - FARKLI"
                 $different++
             } else {
                 $same++
             }
         }
+        
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
     }
     catch {
-        Write-Host "`nHATA: $schema.$procname - $_" -ForegroundColor Red
         $farkList += "$schema.$procname - HATA: $_"
-        $errors++
-    }
-    finally {
-        # Temp dosyayı sil
-        if (Test-Path $tempFile) {
-            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-        }
     }
 }
 
-# Son satırı temizle
 Write-Host "`r                                                                                "
 
-$endTime = Get-Date
-$duration = ($endTime - $startTime).TotalSeconds
-
-# Rapor oluştur
-$reportContent = @"
+# Rapor
+@"
 Prosedur Karsilastirma Raporu
 Tarih: $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
-Sure: $duration saniye
+Dizin: $procdir
 =============================
 
-FARKLI/SORUNLU PROSEDURLER:
----------------------------
 $($farkList -join "`n")
 
 ===== OZET =====
@@ -177,55 +230,35 @@ Ayni: $same
 Farkli: $different
 DB'de Yok: $notfound_db
 Lokal Dosya Yok: $notfound_file
-Hata: $errors
-================
-"@
-
-$reportContent | Out-File -FilePath "fark.txt" -Encoding UTF8
-
-# CSV raporu
-$csvData = @()
-foreach ($item in $farkList) {
-    if ($item -match "^(.+?)\.(.+?) - (.+)$") {
-        $csvData += [PSCustomObject]@{
-            Schema = $matches[1]
-            Procedure = $matches[2]
-            Status = $matches[3]
-        }
-    }
-}
-$csvData | Export-Csv -Path "karsilastirma_raporu.csv" -NoTypeInformation -Encoding UTF8
+"@ | Out-File -FilePath "fark.txt" -Encoding UTF8
 
 # Temizlik
-if (Test-Path "exp.sql") {
-    Remove-Item "exp.sql" -Force -ErrorAction SilentlyContinue
-}
+Remove-Item "exp.sql" -Force -ErrorAction SilentlyContinue
 
-# Özet göster
+# Özet
 Write-Host ""
 Write-Host "====================================" -ForegroundColor Green
 Write-Host "          OZET RAPOR" -ForegroundColor Green
 Write-Host "====================================" -ForegroundColor Green
+Write-Host "Dizin: $procdir" -ForegroundColor Cyan
 Write-Host "Toplam: $total"
 Write-Host "Ayni: $same" -ForegroundColor Green
 Write-Host "Farkli: $different" -ForegroundColor Red
 Write-Host "DB'de Yok: $notfound_db" -ForegroundColor Yellow
 Write-Host "Lokal Dosya Yok: $notfound_file" -ForegroundColor Yellow
-Write-Host "Hata: $errors" -ForegroundColor Magenta
-Write-Host "Sure: $duration saniye" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Green
 
-if ($farkList.Count -gt 0) {
-    Write-Host "`nFarkli/sorunlu prosedurler 'fark.txt' dosyasina kaydedildi." -ForegroundColor Yellow
-    Write-Host "CSV raporu 'karsilastirma_raporu.csv' olarak kaydedildi." -ForegroundColor Yellow
-    
-    $open = Read-Host "`nFark.txt'yi acmak ister misiniz? (E/H)"
-    if ($open -eq 'E' -or $open -eq 'e') {
-        Start-Process notepad.exe fark.txt
+# Lokal dosya yoksa detaylı bilgi ver
+if ($notfound_file -gt 0) {
+    Write-Host "`nLOKAL DOSYA BULUNAMAYANLARIN DETAYI:" -ForegroundColor Red
+    $farkList | Where-Object { $_ -like "*LOKAL DOSYA YOK*" } | Select-Object -First 10 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkRed
     }
-} else {
-    Write-Host "`nTum prosedurler ayni!" -ForegroundColor Green
+    
+    Write-Host "`nDosya isimlendirme kontrolu:" -ForegroundColor Yellow
+    Write-Host "- Dosyalar .prc uzantili mi?" -ForegroundColor Gray
+    Write-Host "- Buyuk/kucuk harf uyumu var mi?" -ForegroundColor Gray
+    Write-Host "- Dosya adinda schema yok, sadece prosedur adi olmali" -ForegroundColor Gray
 }
 
-Write-Host ""
-Read-Host "Cikmak icin Enter'a basin"
+Read-Host "`nEnter'a basin"
