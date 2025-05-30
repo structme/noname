@@ -1,8 +1,8 @@
-# debug_db_connection.ps1 - DB bağlantı ve prosedür sorunu debug
+# test_sqlplus_export.ps1 - SQLPlus export sorununu test et
 
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
-Write-Host "   DB Baglanti ve Prosedur Debug" -ForegroundColor Cyan
+Write-Host "   SQLPlus Export Test" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -11,67 +11,17 @@ $username = Read-Host "Oracle kullanici"
 $password = Read-Host "Oracle sifre"
 $database = Read-Host "Database"
 
-Write-Host "`n1. Baglanti testi..." -ForegroundColor Yellow
+# Test prosedürü
+$testLine = Get-Content "liste.txt" | Select-Object -First 1
+$parts = $testLine.Split('.')
+$schema = $parts[0]
+$procname = $parts[1]
 
-# Bağlantı testi
-@"
-SET HEADING OFF
-SET FEEDBACK OFF
-SELECT 'Baglanti OK - User: ' || USER || ' - DB: ' || ORA_DATABASE_NAME FROM DUAL;
-EXIT;
-"@ | Out-File -FilePath "test.sql" -Encoding ASCII
+Write-Host "`nTest edilecek: $schema.$procname" -ForegroundColor Yellow
+Write-Host ""
 
-$result = & sqlplus -s "$username/$password@$database" "@test.sql" 2>&1
-Write-Host $result -ForegroundColor Green
-
-Write-Host "`n2. Liste.txt'den ilk prosedur bilgisi..." -ForegroundColor Yellow
-
-# İlk prosedürü al
-$firstLine = Get-Content "liste.txt" | Select-Object -First 1
-$parts = $firstLine.Split('.')
-$testSchema = $parts[0]
-$testProc = $parts[1]
-
-Write-Host "Test edilecek: $testSchema.$testProc" -ForegroundColor Cyan
-
-Write-Host "`n3. ALL_OBJECTS kontrolu..." -ForegroundColor Yellow
-
-# ALL_OBJECTS kontrolü
-@"
-SET HEADING OFF
-SET FEEDBACK OFF
-SELECT 'ALL_OBJECTS''da bulunan: ' || COUNT(*) 
-FROM all_objects 
-WHERE owner = UPPER('$testSchema')
-AND object_name = UPPER('$testProc')
-AND object_type = 'PROCEDURE';
-EXIT;
-"@ | Out-File -FilePath "test.sql" -Encoding ASCII
-
-$result = & sqlplus -s "$username/$password@$database" "@test.sql"
-Write-Host $result
-
-Write-Host "`n4. Tum object type kontrolu..." -ForegroundColor Yellow
-
-# Tüm object type'ları kontrol et
-@"
-SET HEADING OFF
-SET FEEDBACK OFF
-SET LINESIZE 200
-SELECT object_type || ': ' || COUNT(*) as sonuc
-FROM all_objects 
-WHERE owner = UPPER('$testSchema')
-AND object_name = UPPER('$testProc')
-GROUP BY object_type;
-EXIT;
-"@ | Out-File -FilePath "test.sql" -Encoding ASCII
-
-$result = & sqlplus -s "$username/$password@$database" "@test.sql"
-Write-Host $result
-
-Write-Host "`n5. Export SQL testi..." -ForegroundColor Yellow
-
-# Export SQL'i test et
+# TEST 1: Parametre ile export
+Write-Host "TEST 1: Parametre ile export (&1, &2)" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
@@ -80,97 +30,112 @@ SET LINESIZE 32767
 SET TRIMSPOOL ON
 SET TERMOUT OFF
 SET LONG 1000000
-SELECT text FROM all_source 
-WHERE owner = UPPER('$testSchema') 
-AND name = UPPER('$testProc') 
-AND type = 'PROCEDURE' 
-ORDER BY line;
+SELECT text FROM all_source WHERE owner = UPPER('&1') AND name = UPPER('&2') AND type = 'PROCEDURE' ORDER BY line;
 EXIT;
-"@ | Out-File -FilePath "test_export.sql" -Encoding ASCII
+"@ | Out-File -FilePath "test1.sql" -Encoding ASCII
 
-Write-Host "SQLPlus komutu: sqlplus -s `"$username/****@$database`" @test_export.sql $testSchema $testProc" -ForegroundColor Gray
+Write-Host "Komut: sqlplus -s ... @test1.sql $schema $procname" -ForegroundColor Gray
+$result1 = & sqlplus -s "$username/$password@$database" "@test1.sql" $schema $procname | Out-String
+Write-Host "Sonuc uzunlugu: $($result1.Length) karakter" -ForegroundColor Yellow
 
-# Export et ve göster
-$exportResult = & sqlplus -s "$username/$password@$database" "@test_export.sql" 2>&1 | Out-String
-
-Write-Host "Export sonucu uzunlugu: $($exportResult.Length) karakter" -ForegroundColor Cyan
-
-if ($exportResult.Length -gt 0) {
-    Write-Host "Ilk 200 karakter:" -ForegroundColor Gray
-    Write-Host $exportResult.Substring(0, [Math]::Min(200, $exportResult.Length)) -ForegroundColor DarkGray
+if ($result1.Length -gt 0) {
+    $result1 | Out-File "test1_output.txt"
+    Write-Host "Sonuc test1_output.txt'ye kaydedildi" -ForegroundColor Green
 }
 
-Write-Host "`n6. Parametre kullanimi testi..." -ForegroundColor Yellow
-
-# & parametreli SQL
+# TEST 2: Doğrudan değerlerle export
+Write-Host "`nTEST 2: Dogrudan degerlerle export" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
+SET PAGESIZE 0
+SET LINESIZE 32767
+SET TRIMSPOOL ON
+SET TERMOUT OFF
+SET LONG 1000000
+SELECT text FROM all_source WHERE owner = UPPER('$schema') AND name = UPPER('$procname') AND type = 'PROCEDURE' ORDER BY line;
+EXIT;
+"@ | Out-File -FilePath "test2.sql" -Encoding ASCII
+
+Write-Host "Komut: sqlplus -s ... @test2.sql" -ForegroundColor Gray
+$result2 = & sqlplus -s "$username/$password@$database" "@test2.sql" | Out-String
+Write-Host "Sonuc uzunlugu: $($result2.Length) karakter" -ForegroundColor Yellow
+
+if ($result2.Length -gt 0) {
+    $result2 | Out-File "test2_output.txt"
+    Write-Host "Sonuc test2_output.txt'ye kaydedildi" -ForegroundColor Green
+}
+
+# TEST 3: DEFINE kullanarak
+Write-Host "`nTEST 3: DEFINE kullanarak" -ForegroundColor Cyan
+@"
+SET HEADING OFF
+SET FEEDBACK OFF
+SET PAGESIZE 0
+SET LINESIZE 32767
+SET TRIMSPOOL ON
+SET TERMOUT OFF
+SET LONG 1000000
 SET VERIFY OFF
-DEFINE schema_param = '&1'
-DEFINE proc_param = '&2'
-SELECT 'Parametre test - Schema: ' || '&&schema_param' || ', Proc: ' || '&&proc_param' FROM DUAL;
-SELECT COUNT(*) || ' kayit bulundu' 
-FROM all_objects 
-WHERE owner = UPPER('&&schema_param')
-AND object_name = UPPER('&&proc_param')
-AND object_type = 'PROCEDURE';
+DEFINE v_schema = '&1'
+DEFINE v_proc = '&2'
+SELECT text FROM all_source WHERE owner = UPPER('&&v_schema') AND name = UPPER('&&v_proc') AND type = 'PROCEDURE' ORDER BY line;
 EXIT;
-"@ | Out-File -FilePath "param_test.sql" -Encoding ASCII
+"@ | Out-File -FilePath "test3.sql" -Encoding ASCII
 
-$result = & sqlplus -s "$username/$password@$database" "@param_test.sql" $testSchema $testProc 2>&1
-Write-Host $result
+Write-Host "Komut: sqlplus -s ... @test3.sql $schema $procname" -ForegroundColor Gray
+$result3 = & sqlplus -s "$username/$password@$database" "@test3.sql" $schema $procname | Out-String
+Write-Host "Sonuc uzunlugu: $($result3.Length) karakter" -ForegroundColor Yellow
 
-Write-Host "`n7. Package icerisinde mi kontrolu..." -ForegroundColor Yellow
+if ($result3.Length -gt 0) {
+    $result3 | Out-File "test3_output.txt"
+    Write-Host "Sonuc test3_output.txt'ye kaydedildi" -ForegroundColor Green
+}
 
-# Package kontrolü
+# TEST 4: Process ile çalıştırma
+Write-Host "`nTEST 4: Start-Process ile" -ForegroundColor Cyan
+$tempFile = "test4_output.txt"
+
+$process = Start-Process -FilePath "sqlplus" `
+    -ArgumentList "-s", "$username/$password@$database", "@test1.sql", $schema, $procname `
+    -NoNewWindow -Wait -RedirectStandardOutput $tempFile -PassThru
+
+if (Test-Path $tempFile) {
+    $fileSize = (Get-Item $tempFile).Length
+    Write-Host "Dosya boyutu: $fileSize byte" -ForegroundColor Yellow
+    
+    if ($fileSize -gt 0) {
+        Write-Host "Ilk 200 karakter:" -ForegroundColor Gray
+        $content = Get-Content $tempFile -Raw
+        Write-Host $content.Substring(0, [Math]::Min(200, $content.Length)) -ForegroundColor DarkGray
+    }
+}
+
+# TEST 5: Sadece satır sayısı kontrolü
+Write-Host "`nTEST 5: Satirlari say" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
-SELECT 'Package kontrolu:' FROM DUAL;
-SELECT object_name || ' (' || object_type || ')'
-FROM all_objects 
-WHERE owner = UPPER('$testSchema')
-AND object_name LIKE '%' || UPPER('$testProc') || '%'
-AND object_type IN ('PACKAGE', 'PACKAGE BODY')
-AND ROWNUM <= 5;
+SELECT COUNT(*) || ' satir bulundu' FROM all_source WHERE owner = UPPER('$schema') AND name = UPPER('$procname') AND type = 'PROCEDURE';
 EXIT;
-"@ | Out-File -FilePath "test.sql" -Encoding ASCII
+"@ | Out-File -FilePath "test5.sql" -Encoding ASCII
 
-$result = & sqlplus -s "$username/$password@$database" "@test.sql"
-Write-Host $result
+$result5 = & sqlplus -s "$username/$password@$database" "@test5.sql"
+Write-Host $result5 -ForegroundColor Yellow
 
-Write-Host "`n8. Yetki kontrolu..." -ForegroundColor Yellow
-
-# Yetki kontrolü
-@"
-SET HEADING OFF
-SET FEEDBACK OFF
-SELECT 'Gordugunuz schema sayisi: ' || COUNT(DISTINCT owner)
-FROM all_objects 
-WHERE object_type = 'PROCEDURE';
-
-SELECT DISTINCT owner 
-FROM all_objects 
-WHERE object_type = 'PROCEDURE'
-AND ROWNUM <= 10
-ORDER BY owner;
-EXIT;
-"@ | Out-File -FilePath "test.sql" -Encoding ASCII
-
-$result = & sqlplus -s "$username/$password@$database" "@test.sql"
-Write-Host $result
+# Karşılaştırma
+Write-Host "`n===== SONUC KARSILASTIRMA =====" -ForegroundColor Green
+Write-Host "Test 1 (Parametre): $($result1.Length) karakter" -ForegroundColor $(if($result1.Length -gt 0){"Green"}else{"Red"})
+Write-Host "Test 2 (Dogrudan): $($result2.Length) karakter" -ForegroundColor $(if($result2.Length -gt 0){"Green"}else{"Red"})
+Write-Host "Test 3 (DEFINE): $($result3.Length) karakter" -ForegroundColor $(if($result3.Length -gt 0){"Green"}else{"Red"})
+Write-Host "Test 4 (Process): $fileSize byte" -ForegroundColor $(if($fileSize -gt 0){"Green"}else{"Red"})
 
 # Temizlik
-Remove-Item "test.sql", "test_export.sql", "param_test.sql" -Force -ErrorAction SilentlyContinue
+Remove-Item "test*.sql", "test*_output.txt" -Force -ErrorAction SilentlyContinue
 
-Write-Host "`n9. Manuel SQL testi..." -ForegroundColor Yellow
-Write-Host "Asagidaki SQL'i SQLPlus'ta manuel calistirip sonucu kontrol edin:" -ForegroundColor Cyan
-Write-Host @"
-SELECT owner, object_name, object_type, status
-FROM all_objects
-WHERE owner = UPPER('$testSchema')
-AND object_name = UPPER('$testProc');
-"@ -ForegroundColor Gray
+Write-Host "`nONERI:" -ForegroundColor Yellow
+if ($result2.Length -gt 0 -and $result1.Length -eq 0) {
+    Write-Host "Parametre kullanimi calismiyor. Dogrudan deger kullanin." -ForegroundColor Red
+}
 
 Read-Host "`nEnter'a basin"
