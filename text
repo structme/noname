@@ -1,8 +1,6 @@
-# compare_full_procedure.ps1 - CREATE OR REPLACE ve / işaretini de dahil eden versiyon
-
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
-Write-Host "   Prosedur Karsilastirma Final v4" -ForegroundColor Cyan
+Write-Host "    Prosedur Karsilastirma Final v5" -ForegroundColor Cyan # Sürüm güncellendi
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -23,8 +21,12 @@ $useSchemaInFilename = ($format -eq "2")
 Write-Host "`nKarsilastirma formati:" -ForegroundColor Yellow
 Write-Host "1. Tam karsilastirma (CREATE OR REPLACE dahil)" -ForegroundColor Gray
 Write-Host "2. Sadece prosedur govdesi (CREATE OR REPLACE haric)" -ForegroundColor Gray
-$compareFormat = Read-Host "Secim (1 veya 2)"
-$includeCreateStatement = ($compareFormat -eq "1")
+Write-Host "3. Govde (CREATE OR REPLACE ve ilk satir haric)" -ForegroundColor Gray # YENİ SEÇENEK
+$compareOption = Read-Host "Secim (1, 2 veya 3)"
+
+$includeCreateStatement = ($compareOption -eq "1")
+$bodyOnlyNoCreate = ($compareOption -eq "2")
+$bodyOnlySkipFirstLine = ($compareOption -eq "3") # YENİ DEĞİŞKEN
 
 # Liste oku
 $procedures = Get-Content "liste.txt"
@@ -33,47 +35,83 @@ $total = $procedures.Count
 Write-Host "`nToplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
 if ($includeCreateStatement) {
     Write-Host "DB'den alinanlara CREATE OR REPLACE eklenecek." -ForegroundColor Cyan
-} else {
+} elseif ($bodyOnlySkipFirstLine) {
+    Write-Host "CREATE OR REPLACE cikarilacak, govdenin ilk satiri ATLANACAK." -ForegroundColor Cyan
+} else { # $bodyOnlyNoCreate
     Write-Host "Lokal dosyalardan CREATE OR REPLACE cikarilacak." -ForegroundColor Cyan
 }
 Write-Host ""
 
 # Normalize fonksiyonu
 function Normalize-Content {
-    param($content, $removeCreateStatement = $false, $removeSlash = $false)
+    param(
+        [string]$content, 
+        [bool]$removeCreateStatement = $false, 
+        [bool]$removeSlash = $false
+    )
     
-    # Satır sonu karakterlerini düzelt
+    if ([string]::IsNullOrEmpty($content)) {
+        return ""
+    }
+    # Satır sonu karakterlerini düzelt (CRLF, CR -> LF)
     $normalized = $content -replace "`r`n", "`n" -replace "`r", "`n"
     
     # CREATE OR REPLACE'i çıkar
     if ($removeCreateStatement) {
         # CREATE OR REPLACE PROCEDURE ... satırını bul ve çıkar
-        $normalized = $normalized -replace "(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?", ""
+        # Bu regex sadece "CREATE OR REPLACE" kısmını hedefler.
+        $normalized = $normalized -replace "(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?(PROCEDURE|FUNCTION|PACKAGE|PACKAGE BODY|TYPE|TYPE BODY|TRIGGER|VIEW|MATERIALIZED VIEW|SEQUENCE|SYNONYM)?\s+", ""
     }
     
-    # Son / işaretini çıkar
+    # Son / işaretini çıkar (genellikle satırın başında olur)
     if ($removeSlash) {
-        $normalized = $normalized -replace "(?m)^\s*/\s*$", ""
+        $normalized = $normalized -replace "(?m)^\s*/\s*$", "" # Multiline mode, sadece / olan satırları
     }
     
     # Satır sonundaki boşlukları temizle
     $lines = $normalized -split "`n" | ForEach-Object { $_.TrimEnd() }
     $normalized = $lines -join "`n"
     
-    # Başındaki ve sonundaki boşlukları temizle
+    # Başındaki ve sonundaki boşlukları ve boş satırları temizle
     $normalized = $normalized.Trim()
     
     return $normalized
 }
 
-# Test - ilk prosedürü kontrol
+# YENİ FONKSİYON: İçeriğin ilk satırını kaldırır
+function Remove-FirstLine {
+    param([string]$Content)
+    
+    if ([string]::IsNullOrEmpty($Content)) {
+        return ""
+    }
+    
+    $lines = $Content -split "`n"
+    if ($lines.Length -le 1) {
+        return "" # Eğer 0 veya 1 satır varsa, ilk satırı kaldırmak boş sonuç verir
+    }
+    
+    # İlk satırı atla ve kalanları birleştir
+    return ($lines | Select-Object -Skip 1) -join "`n"
+}
+
+
+# Test - ilk prosedürü kontrol (Bu kısım sadece bilgilendirme amaçlıdır, değiştirilmedi)
 Write-Host "Ilk proseduru test ediyoruz..." -ForegroundColor Yellow
 $testLine = Get-Content "liste.txt" | Select-Object -First 1
-$testParts = $testLine.Split('.')
-$testSchema = $testParts[0]
-$testProc = $testParts[1]
+if ($testLine) {
+    $testParts = $testLine.Split('.')
+    if ($testParts.Count -ge 2) {
+        $testSchema = $testParts[0]
+        $testProc = $testParts[1]
+        Write-Host "Test: $testSchema.$testProc" -ForegroundColor Cyan
+    } else {
+        Write-Host "Test için liste.txt'deki ilk satır formatı geçersiz." -ForegroundColor Red
+    }
+} else {
+    Write-Host "Test için liste.txt boş veya okunamadı." -ForegroundColor Red
+}
 
-Write-Host "Test: $testSchema.$testProc" -ForegroundColor Cyan
 
 # Sonuç değişkenleri
 $results = @()
@@ -92,12 +130,15 @@ foreach ($line in $procedures) {
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
     
     $parts = $line.Split('.')
-    if ($parts.Count -ne 2) { continue }
+    if ($parts.Count -ne 2) {
+        Write-Warning "Satir formati hatali (schema.procname bekleniyor): $line"
+        continue
+    }
     
-    $schema = $parts[0].Trim()
-    $procname = $parts[1].Trim()
+    $schema = $parts[0].Trim().ToUpper() # Şema adları genellikle büyük harftir DB'de
+    $procname = $parts[1].Trim().ToUpper() # Prosedür adları genellikle büyük harftir DB'de
     
-    Write-Host "`r[$count/$total] $schema.$procname kontrol ediliyor...                    " -NoNewline
+    Write-Host "`r[$count/$total] $schema.$procname kontrol ediliyor...                     " -NoNewline
     
     # Dosya adı
     if ($useSchemaInFilename) {
@@ -106,9 +147,20 @@ foreach ($line in $procedures) {
         $fileName = "$procname.prc"
     }
     
-    # Lokal dosya bul
+    # Lokal dosya bul (büyük/küçük harf duyarsız)
     $localFile = $null
-    foreach ($variant in @($fileName, $fileName.ToUpper(), $fileName.ToLower())) {
+    # Önce tam eşleşme, sonra sadece dosya adı kısmı büyük/küçük harf varyasyonları
+    $possibleFileNames = @(
+        $fileName, # Original case from schema.procname
+        $fileName.ToLower(), 
+        $fileName.ToUpper(),
+        "$($parts[0].Trim()).$($parts[1].Trim()).prc", # Original case from liste.txt if different
+        "$($parts[1].Trim()).prc", # Sadece procname (original case)
+        "$($parts[1].Trim().ToLower()).prc",
+        "$($parts[1].Trim().ToUpper()).prc"
+    ) | Get-Unique
+
+    foreach ($variant in $possibleFileNames) {
         $testPath = Join-Path $procdir $variant
         if (Test-Path $testPath) {
             $localFile = $testPath
@@ -117,13 +169,16 @@ foreach ($line in $procedures) {
     }
     
     if ($null -eq $localFile) {
-        $results += "$schema.$procname - LOKAL DOSYA YOK"
+        $results += "$schema.$procname - LOKAL DOSYA YOK ($fileName denendi)"
         $notfound_file++
         continue
     }
     
     # SPOOL ile DB'den al
-    $spoolFile = "spool_$($procname).txt"
+    $spoolFile = "spool_$($procname)_$($count).txt" # Benzersiz spool dosyası adı
+    $sqlFile = "sql_$($procname)_$($count).sql"     # Benzersiz sql dosyası adı
+
+    # SQLPLUS ayarları HEADING OFF ve FEEDBACK OFF önemli
     $sqlContent = @"
 SET HEADING OFF
 SET FEEDBACK OFF
@@ -140,24 +195,28 @@ SET LONG 2000000
 SET LONGCHUNKSIZE 2000000
 SPOOL $spoolFile
 SELECT text FROM all_source 
-WHERE owner = UPPER('$schema') 
-AND name = UPPER('$procname') 
-AND type = 'PROCEDURE'
+WHERE owner = '$schema' 
+AND name = '$procname' 
+AND type = 'PROCEDURE' -- Sadece PROCEDURE tipindekiler için
 ORDER BY line;
 SPOOL OFF
 EXIT;
 "@
     
-    $sqlFile = "sql_$($procname).sql"
-    
     try {
         # SQL dosyasını oluştur ve çalıştır
         $sqlContent | Out-File -FilePath $sqlFile -Encoding ASCII
-        & cmd /c "sqlplus -s $username/$password@$database < $sqlFile > nul 2>&1"
+        # SQL*Plus'tan gelebilecek hataları yakalamak için stderr yönlendirmesini kaldır veya kontrol et
+        $sqlPlusProcess = Start-Process sqlplus -ArgumentList "-s $username/$password@$database @$sqlFile" -Wait -PassThru -WindowStyle Hidden
         
+        if ($sqlPlusProcess.ExitCode -ne 0) {
+            # Spool dosyası oluşmuş olsa bile SQLPlus hata verdiyse bunu belirt
+             Write-Warning "SQL*Plus $schema.$procname için hata koduyla ($($sqlPlusProcess.ExitCode)) sonlandı."
+        }
+
         # SPOOL dosyası kontrolü
         if (-not (Test-Path $spoolFile) -or (Get-Item $spoolFile).Length -eq 0) {
-            $results += "$schema.$procname - DB'DE YOK"
+            $results += "$schema.$procname - DB'DE YOK veya SQLPlus hatası"
             $notfound_db++
         }
         else {
@@ -169,32 +228,43 @@ EXIT;
             if ($null -eq $fileContent) { $fileContent = "" }
             
             # Karşılaştırma yapılacak içerikleri hazırla
+            $fileContentFinal = ""
+            $dbContentFinal = ""
+
             if ($includeCreateStatement) {
-                # DB içeriğine CREATE OR REPLACE ekle
-                $dbContentFull = "CREATE OR REPLACE " + $dbContent.Trim() + "`n/"
-                $fileContentNorm = Normalize-Content $fileContent
-                $dbContentNorm = Normalize-Content $dbContentFull
-            } else {
-                # Her ikisinden de CREATE OR REPLACE ve / çıkar
-                $fileContentNorm = Normalize-Content $fileContent -removeCreateStatement $true -removeSlash $true
-                $dbContentNorm = Normalize-Content $dbContent -removeCreateStatement $true -removeSlash $true
+                # DB içeriğine CREATE OR REPLACE ekle ve ŞEMA.PROSEDÜR_ADI formatını zorla
+                $bodyFromDB = $dbContent.Trim() # Trim before regex
+                $bodyStripped = $bodyFromDB -replace '(?is)^\s*PROCEDURE\s+\S+(\.\S+)?\s*', ''
+                $dbContentFull = "CREATE OR REPLACE PROCEDURE $($schema).$($procname) $($bodyStripped.Trim())`n/" # bodyStripped'ı da trimle
+                
+                $fileContentFinal = Normalize-Content $fileContent
+                $dbContentFinal = Normalize-Content $dbContentFull
+            } elseif ($bodyOnlyNoCreate) {
+                # Sadece govde, CREATE OR REPLACE ve / haric
+                $fileContentFinal = Normalize-Content $fileContent -removeCreateStatement $true -removeSlash $true
+                $dbContentFinal = Normalize-Content $dbContent -removeCreateStatement $true -removeSlash $true
+            } elseif ($bodyOnlySkipFirstLine) {
+                # Govde, CREATE OR REPLACE, / ve ILK SATIR haric
+                $tempFileNorm = Normalize-Content $fileContent -removeCreateStatement $true -removeSlash $true
+                $tempDbNorm = Normalize-Content $dbContent -removeCreateStatement $true -removeSlash $true
+                
+                $fileContentFinal = (Remove-FirstLine $tempFileNorm).Trim()
+                $dbContentFinal = (Remove-FirstLine $tempDbNorm).Trim()
             }
             
             # Karşılaştır
-            if ($dbContentNorm -eq $fileContentNorm) {
+            if ($dbContentFinal -eq $fileContentFinal) {
                 $same++
             } else {
                 $different++
                 
                 # Debug için ilk 3 farklı prosedürü kaydet
                 if ($different -le 3) {
-                    # Satır satır farkları göster
-                    $dbLines = $dbContentNorm -split "`n"
-                    $fileLines = $fileContentNorm -split "`n"
+                    $dbLines = $dbContentFinal -split "`n"
+                    $fileLines = $fileContentFinal -split "`n"
                     
                     $diffInfo = "FARKLI - DB: $($dbLines.Count) satir, Dosya: $($fileLines.Count) satir"
                     
-                    # İlk farklı satırı bul
                     $firstDiff = -1
                     for ($i = 0; $i -lt [Math]::Max($dbLines.Count, $fileLines.Count); $i++) {
                         $dbLine = if ($i -lt $dbLines.Count) { $dbLines[$i] } else { "" }
@@ -213,8 +283,8 @@ EXIT;
                     $results += "$schema.$procname - $diffInfo"
                     
                     # Debug dosyaları
-                    $dbContentNorm | Out-File "debug_db_$($different)_$procname.txt" -Encoding UTF8
-                    $fileContentNorm | Out-File "debug_file_$($different)_$procname.txt" -Encoding UTF8
+                    $dbContentFinal | Out-File "debug_db_$($schema)_$($procname)_$($different).txt" -Encoding UTF8
+                    $fileContentFinal | Out-File "debug_file_$($schema)_$($procname)_$($different).txt" -Encoding UTF8
                 } else {
                     $results += "$schema.$procname - FARKLI"
                 }
@@ -222,67 +292,101 @@ EXIT;
         }
     }
     catch {
-        $results += "$schema.$procname - HATA: $_"
+        $results += "$schema.$procname - HATA: $($_.Exception.Message)"
     }
     finally {
         # Temizlik
-        Remove-Item $sqlFile, $spoolFile -Force -ErrorAction SilentlyContinue
+        if (Test-Path $sqlFile) { Remove-Item $sqlFile -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $spoolFile) { Remove-Item $spoolFile -Force -ErrorAction SilentlyContinue }
     }
 }
 
-Write-Host "`r                                                                                "
+Write-Host "`r                                                                               " # Önceki satırı temizle
 
 $endTime = Get-Date
-$duration = ($endTime - $startTime).TotalSeconds
+$duration = [Math]::Round(($endTime - $startTime).TotalSeconds, 2) # Süreyi yuvarla
 
 # Rapor
-$report = @"
+$comparisonModeText = ""
+if ($includeCreateStatement) {
+    $comparisonModeText = 'Tam karsilastirma (CREATE OR REPLACE dahil)'
+} elseif ($bodyOnlyNoCreate) {
+    $comparisonModeText = 'Sadece prosedur govdesi (CREATE OR REPLACE haric)'
+} elseif ($bodyOnlySkipFirstLine) {
+    $comparisonModeText = 'Prosedur govdesi (CREATE OR REPLACE ve ilk satir haric)'
+}
+
+$reportHeader = @"
 Prosedur Karsilastirma Raporu
 Tarih: $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
 Sure: $duration saniye
-Format: $(if($includeCreateStatement){'CREATE OR REPLACE dahil'}else{'Sadece prosedur govdesi'})
-=============================
+Veritabani: $database
+Prosedur Dizini: $procdir
+Karsilastirma Formati: $comparisonModeText
+Dosya Adi Formati: $(if($useSchemaInFilename){'SCHEMA.PROSEDUR.prc'}else{'PROSEDUR.prc'})
+=================================================================
+"@
 
+$reportBody = ""
+if ($results.Count -gt 0) {
+    $reportBody = @"
 FARKLI/SORUNLU PROSEDURLER:
 ---------------------------
 $($results -join "`n")
+"@
+} else {
+    $reportBody = "FARKLI YA DA SORUNLU PROSEDUR BULUNAMADI."
+}
 
+$reportSummary = @"
 ===== OZET =====
-Toplam: $total
+Toplam Kontrol Edilen: $total
 Ayni: $same
 Farkli: $different
-DB'de Yok: $notfound_db
+DB'de Yok / SQL Hatasi: $notfound_db
 Lokal Dosya Yok: $notfound_file
 ================
 "@
 
-$report | Out-File -FilePath "fark.txt" -Encoding UTF8
+$report = $reportHeader + "`n" + $reportBody + "`n`n" + $reportSummary
+
+$report | Out-File -FilePath "fark_raporu.txt" -Encoding UTF8
 
 # Özet
 Write-Host ""
 Write-Host "====================================" -ForegroundColor Green
-Write-Host "          OZET RAPOR" -ForegroundColor Green
+Write-Host "              OZET RAPOR" -ForegroundColor Green
 Write-Host "====================================" -ForegroundColor Green
-Write-Host "Toplam: $total"
+Write-Host "Toplam Kontrol Edilen: $total"
 Write-Host "Ayni: $same" -ForegroundColor Green
 Write-Host "Farkli: $different" -ForegroundColor Red
-Write-Host "DB'de Yok: $notfound_db" -ForegroundColor Yellow
+Write-Host "DB'de Yok / SQL Hatasi: $notfound_db" -ForegroundColor Yellow
 Write-Host "Lokal Dosya Yok: $notfound_file" -ForegroundColor Yellow
 Write-Host "Sure: $duration saniye" -ForegroundColor Cyan
+Write-Host "Rapor dosyasi: fark_raporu.txt" -ForegroundColor White
 Write-Host "====================================" -ForegroundColor Green
 
 if ($different -gt 0) {
     Write-Host "`nNOT:" -ForegroundColor Yellow
     if ($includeCreateStatement) {
-        Write-Host "DB'den gelen prosedur govdesine CREATE OR REPLACE eklendi." -ForegroundColor Gray
-        Write-Host "Eger hala fark varsa, prosedur parametreleri veya" -ForegroundColor Gray
-        Write-Host "AS/IS kullaniminda fark olabilir." -ForegroundColor Gray
-    } else {
+        Write-Host "DB'den gelen prosedur govdesine CREATE OR REPLACE ve ŞEMA.PROSEDUR_ADI eklendi." -ForegroundColor Gray
+        Write-Host "Eger hala fark varsa, prosedurun imzasi (parametreler), AS/IS kullanimi" -ForegroundColor Gray
+        Write-Host "veya icerikteki diger detaylar farkli olabilir." -ForegroundColor Gray
+    } elseif ($bodyOnlyNoCreate) {
         Write-Host "Sadece prosedur govdeleri karsilastirildi." -ForegroundColor Gray
-        Write-Host "CREATE OR REPLACE ve / isaretleri yoksayildi." -ForegroundColor Gray
+        Write-Host "CREATE OR REPLACE, / isaretleri ve prosedür tanımlama satırı (PROCEDURE...AS/IS) yoksayildi." -ForegroundColor Gray
+    } elseif ($bodyOnlySkipFirstLine) {
+        Write-Host "Prosedur govdeleri, ilk satirlari ATLANARAK karsilastirildi." -ForegroundColor Gray
+        Write-Host "CREATE OR REPLACE, /, prosedür tanımlama satırı ve govdenin ilk satiri yoksayildi." -ForegroundColor Gray
     }
     
-    Write-Host "`nIlk 3 farkli prosedur icin debug dosyalari olusturuldu." -ForegroundColor Yellow
+    if (($results | Where-Object {$_ -match "FARKLI"}).Count -gt 0 -and $different -le 3) {
+         Write-Host "`nIlk 3 farkli prosedur icin debug dosyalari (debug_db_... ve debug_file_...) olusturuldu." -ForegroundColor Yellow
+    } elseif (($results | Where-Object {$_ -match "FARKLI"}).Count -gt 0) {
+         Write-Host "`nFarkli prosedurler icin debug dosyalari (ilk 3) olusturulur." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "`nTum karsilastirilan prosedurler AYNI." -ForegroundColor Green
 }
 
-Read-Host "`nEnter'a basin"
+Read-Host "`nKapatmak icin Enter'a basin"
