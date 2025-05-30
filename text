@@ -1,8 +1,8 @@
-# compare_final.ps1 - Test edilmiş çalışan versiyon
+# compare_normalized.ps1 - Satır sonu ve boşluk sorunları çözülmüş versiyon
 
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
-Write-Host "   Prosedur Karsilastirma Final" -ForegroundColor Cyan
+Write-Host "   Prosedur Karsilastirma v3" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -19,6 +19,13 @@ Write-Host "2. SCHEMA.PROSEDUR.prc" -ForegroundColor Gray
 $format = Read-Host "Secim (1 veya 2)"
 $useSchemaInFilename = ($format -eq "2")
 
+# Karşılaştırma modu
+Write-Host "`nKarsilastirma modu:" -ForegroundColor Yellow
+Write-Host "1. Normal (birebir ayni)" -ForegroundColor Gray
+Write-Host "2. Esnek (bosluk/satir sonu farklarini yoksay)" -ForegroundColor Gray
+$compareMode = Read-Host "Secim (1 veya 2)"
+$flexibleCompare = ($compareMode -eq "2")
+
 # Dizin kontrolü
 if (-not (Test-Path $procdir)) {
     Write-Host "HATA: Dizin bulunamadi!" -ForegroundColor Red
@@ -26,12 +33,46 @@ if (-not (Test-Path $procdir)) {
     exit
 }
 
+# Normalizasyon fonksiyonu
+function Normalize-Content {
+    param($content)
+    
+    # Satır sonu karakterlerini düzelt
+    $normalized = $content -replace "`r`n", "`n" -replace "`r", "`n"
+    
+    # Satır sonundaki boşlukları temizle
+    $normalized = $normalized -split "`n" | ForEach-Object { $_.TrimEnd() } | Join-String -Separator "`n"
+    
+    # Birden fazla boş satırı tek satıra indir
+    $normalized = $normalized -replace "`n`n+", "`n`n"
+    
+    # Başındaki ve sonundaki boşlukları temizle
+    $normalized = $normalized.Trim()
+    
+    # Tab karakterlerini boşluğa çevir
+    $normalized = $normalized -replace "`t", "    "
+    
+    # Birden fazla boşluğu tek boşluğa indir (opsiyonel)
+    if ($flexibleCompare) {
+        $normalized = $normalized -replace " +", " "
+        # Büyük/küçük harf duyarsız (opsiyonel)
+        # $normalized = $normalized.ToUpper()
+    }
+    
+    return $normalized
+}
+
 # Liste oku
 $procedures = Get-Content "liste.txt"
 $total = $procedures.Count
 
 Write-Host "`nToplam $total prosedur kontrol edilecek." -ForegroundColor Yellow
+Write-Host "Karsilastirma modu: $(if($flexibleCompare){'Esnek'}else{'Normal'})" -ForegroundColor Cyan
 Write-Host ""
+
+# Debug için ilk karşılaştırmayı göster
+$showFirstDiff = Read-Host "Ilk farki detayli goster? (E/H)"
+$debugFirst = ($showFirstDiff -eq 'E' -or $showFirstDiff -eq 'e')
 
 # Sonuç değişkenleri
 $results = @()
@@ -39,6 +80,7 @@ $same = 0
 $different = 0
 $notfound_db = 0
 $notfound_file = 0
+$firstDiffShown = $false
 
 $startTime = Get-Date
 
@@ -80,7 +122,7 @@ foreach ($line in $procedures) {
         continue
     }
     
-    # SQL dosyası oluştur
+    # SQL dosyası
     $sqlContent = @"
 SET HEADING OFF
 SET FEEDBACK OFF
@@ -105,7 +147,7 @@ EXIT;
         # SQL dosyasını oluştur
         $sqlContent | Out-File -FilePath $sqlFile -Encoding ASCII
         
-        # SQLPlus'ı CMD üzerinden çalıştır (@ sorunu olmaması için)
+        # SQLPlus çalıştır
         $cmdCommand = "sqlplus -s $username/$password@$database < $sqlFile > $tempFile 2>&1"
         & cmd /c $cmdCommand
         
@@ -122,16 +164,71 @@ EXIT;
             if ($null -eq $dbContent) { $dbContent = "" }
             if ($null -eq $fileContent) { $fileContent = "" }
             
+            # Orijinal boyutlar
+            $dbOriginalSize = $dbContent.Length
+            $fileOriginalSize = $fileContent.Length
+            
             # Normalize et
-            $dbContent = ($dbContent -replace "`r`n", "`n" -replace "`r", "`n").Trim()
-            $fileContent = ($fileContent -replace "`r`n", "`n" -replace "`r", "`n").Trim()
+            $dbNormalized = Normalize-Content $dbContent
+            $fileNormalized = Normalize-Content $fileContent
             
             # Karşılaştır
-            if ($dbContent -eq $fileContent) {
+            if ($dbNormalized -eq $fileNormalized) {
                 $same++
             } else {
-                $results += "$schema.$procname - FARKLI (DB: $($dbContent.Length) byte, Dosya: $($fileContent.Length) byte)"
                 $different++
+                
+                # Detaylı bilgi
+                $diffInfo = "FARKLI - DB: $dbOriginalSize byte ($($dbNormalized.Length) normalized), " +
+                           "Dosya: $fileOriginalSize byte ($($fileNormalized.Length) normalized)"
+                
+                $results += "$schema.$procname - $diffInfo"
+                
+                # İlk farkı debug et
+                if ($debugFirst -and -not $firstDiffShown) {
+                    $firstDiffShown = $true
+                    Write-Host "`n`n===== ILK FARK DETAYI =====" -ForegroundColor Yellow
+                    Write-Host "Prosedur: $schema.$procname" -ForegroundColor Cyan
+                    Write-Host "DB Boyut: $dbOriginalSize -> $($dbNormalized.Length) (normalize)" -ForegroundColor Gray
+                    Write-Host "Dosya Boyut: $fileOriginalSize -> $($fileNormalized.Length) (normalize)" -ForegroundColor Gray
+                    
+                    # Satır satır karşılaştır
+                    $dbLines = $dbNormalized -split "`n"
+                    $fileLines = $fileNormalized -split "`n"
+                    
+                    Write-Host "`nSatir sayilari - DB: $($dbLines.Count), Dosya: $($fileLines.Count)" -ForegroundColor Gray
+                    
+                    # İlk farklı satırı bul
+                    $maxLines = [Math]::Max($dbLines.Count, $fileLines.Count)
+                    for ($i = 0; $i -lt $maxLines; $i++) {
+                        $dbLine = if ($i -lt $dbLines.Count) { $dbLines[$i] } else { "<SATIR YOK>" }
+                        $fileLine = if ($i -lt $fileLines.Count) { $fileLines[$i] } else { "<SATIR YOK>" }
+                        
+                        if ($dbLine -ne $fileLine) {
+                            Write-Host "`nIlk farkli satir: $($i+1)" -ForegroundColor Red
+                            Write-Host "DB   : [$dbLine]" -ForegroundColor Yellow
+                            Write-Host "Dosya: [$fileLine]" -ForegroundColor Yellow
+                            
+                            # Hex değerleri göster
+                            if ($dbLine.Length -gt 0 -and $fileLine.Length -gt 0) {
+                                Write-Host "`nKarakter kodlari:" -ForegroundColor Gray
+                                $dbBytes = [System.Text.Encoding]::UTF8.GetBytes($dbLine)
+                                $fileBytes = [System.Text.Encoding]::UTF8.GetBytes($fileLine)
+                                Write-Host "DB   : $($dbBytes -join ' ')" -ForegroundColor DarkGray
+                                Write-Host "Dosya: $($fileBytes -join ' ')" -ForegroundColor DarkGray
+                            }
+                            break
+                        }
+                    }
+                    
+                    # Debug dosyaları oluştur
+                    $dbNormalized | Out-File "debug_db_$procname.txt" -Encoding UTF8
+                    $fileNormalized | Out-File "debug_file_$procname.txt" -Encoding UTF8
+                    Write-Host "`nDebug dosyalari olusturuldu:" -ForegroundColor Gray
+                    Write-Host "- debug_db_$procname.txt" -ForegroundColor DarkGray
+                    Write-Host "- debug_file_$procname.txt" -ForegroundColor DarkGray
+                    Write-Host "=========================`n" -ForegroundColor Yellow
+                }
             }
         }
     }
@@ -150,12 +247,12 @@ Write-Host "`r                                                                  
 $endTime = Get-Date
 $duration = ($endTime - $startTime).TotalSeconds
 
-# Rapor oluştur
+# Rapor
 $report = @"
 Prosedur Karsilastirma Raporu
 Tarih: $(Get-Date -Format "dd.MM.yyyy HH:mm:ss")
 Sure: $duration saniye
-Dosya Formati: $(if($useSchemaInFilename){'SCHEMA.PROSEDUR.prc'}else{'PROSEDUR.prc'})
+Karsilastirma Modu: $(if($flexibleCompare){'Esnek (bosluk/satir sonu farklari yoksayildi)'}else{'Normal (birebir karsilastirma)'})
 =============================
 
 FARKLI/SORUNLU PROSEDURLER:
@@ -173,16 +270,7 @@ Lokal Dosya Yok: $notfound_file
 
 $report | Out-File -FilePath "fark.txt" -Encoding UTF8
 
-# CSV raporu
-$csvData = @("Schema;Prosedur;Durum;Detay")
-foreach ($item in $results) {
-    if ($item -match "^(.+?)\.(.+?) - (.+)$") {
-        $csvData += "$($matches[1]);$($matches[2]);$($matches[3]);"
-    }
-}
-$csvData | Out-File -FilePath "karsilastirma_raporu.csv" -Encoding UTF8
-
-# Özet göster
+# Özet
 Write-Host ""
 Write-Host "====================================" -ForegroundColor Green
 Write-Host "          OZET RAPOR" -ForegroundColor Green
@@ -195,17 +283,12 @@ Write-Host "Lokal Dosya Yok: $notfound_file" -ForegroundColor Yellow
 Write-Host "Sure: $duration saniye" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Green
 
-if ($results.Count -gt 0) {
-    Write-Host "`nDetaylar:" -ForegroundColor Yellow
-    Write-Host "- fark.txt (detayli rapor)" -ForegroundColor Gray
-    Write-Host "- karsilastirma_raporu.csv (Excel raporu)" -ForegroundColor Gray
-    
-    $open = Read-Host "`nFark.txt'yi acmak ister misiniz? (E/H)"
-    if ($open -eq 'E' -or $open -eq 'e') {
-        Start-Process notepad.exe fark.txt
+if ($different -gt 0) {
+    Write-Host "`nONERI:" -ForegroundColor Yellow
+    if (-not $flexibleCompare) {
+        Write-Host "Bosluk/satir sonu farklarindan dolayi farkli gorunuyor olabilir." -ForegroundColor Gray
+        Write-Host "Esnek karsilastirma modunu (2) deneyin." -ForegroundColor Gray
     }
-} else {
-    Write-Host "`nTum prosedurler ayni!" -ForegroundColor Green
 }
 
-Read-Host "`nCikmak icin Enter'a basin"
+Read-Host "`nEnter'a basin"
