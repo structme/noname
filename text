@@ -1,8 +1,8 @@
-# test_sqlplus_export.ps1 - SQLPlus export sorununu test et
+# deep_debug_sqlplus.ps1 - SQLPlus çıktı sorunu debug
 
 Clear-Host
 Write-Host "====================================" -ForegroundColor Cyan
-Write-Host "   SQLPlus Export Test" -ForegroundColor Cyan
+Write-Host "   Detayli SQLPlus Debug" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -17,125 +17,165 @@ $parts = $testLine.Split('.')
 $schema = $parts[0]
 $procname = $parts[1]
 
-Write-Host "`nTest edilecek: $schema.$procname" -ForegroundColor Yellow
-Write-Host ""
+Write-Host "`nTest: $schema.$procname" -ForegroundColor Yellow
 
-# TEST 1: Parametre ile export
-Write-Host "TEST 1: Parametre ile export (&1, &2)" -ForegroundColor Cyan
+# TEST 1: En basit sorgu
+Write-Host "`nTEST 1: Basit SELECT" -ForegroundColor Cyan
 @"
-SET HEADING OFF
-SET FEEDBACK OFF
-SET PAGESIZE 0
-SET LINESIZE 32767
-SET TRIMSPOOL ON
-SET TERMOUT OFF
-SET LONG 1000000
-SELECT text FROM all_source WHERE owner = UPPER('&1') AND name = UPPER('&2') AND type = 'PROCEDURE' ORDER BY line;
+SELECT 'Test OK' FROM DUAL;
 EXIT;
 "@ | Out-File -FilePath "test1.sql" -Encoding ASCII
 
-Write-Host "Komut: sqlplus -s ... @test1.sql $schema $procname" -ForegroundColor Gray
-$result1 = & sqlplus -s "$username/$password@$database" "@test1.sql" $schema $procname | Out-String
-Write-Host "Sonuc uzunlugu: $($result1.Length) karakter" -ForegroundColor Yellow
+$result1 = & cmd /c "sqlplus -s $username/$password@$database < test1.sql" 2>&1
+Write-Host "Sonuc: $result1" -ForegroundColor $(if($result1 -like "*Test OK*"){"Green"}else{"Red"})
 
-if ($result1.Length -gt 0) {
-    $result1 | Out-File "test1_output.txt"
-    Write-Host "Sonuc test1_output.txt'ye kaydedildi" -ForegroundColor Green
-}
-
-# TEST 2: Doğrudan değerlerle export
-Write-Host "`nTEST 2: Dogrudan degerlerle export" -ForegroundColor Cyan
+# TEST 2: Prosedür varlık kontrolü
+Write-Host "`nTEST 2: Prosedur var mi?" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
-SET PAGESIZE 0
-SET LINESIZE 32767
-SET TRIMSPOOL ON
-SET TERMOUT OFF
-SET LONG 1000000
-SELECT text FROM all_source WHERE owner = UPPER('$schema') AND name = UPPER('$procname') AND type = 'PROCEDURE' ORDER BY line;
+SELECT COUNT(*) FROM all_objects 
+WHERE owner = UPPER('$schema') 
+AND object_name = UPPER('$procname') 
+AND object_type = 'PROCEDURE';
 EXIT;
 "@ | Out-File -FilePath "test2.sql" -Encoding ASCII
 
-Write-Host "Komut: sqlplus -s ... @test2.sql" -ForegroundColor Gray
-$result2 = & sqlplus -s "$username/$password@$database" "@test2.sql" | Out-String
-Write-Host "Sonuc uzunlugu: $($result2.Length) karakter" -ForegroundColor Yellow
+$result2 = & cmd /c "sqlplus -s $username/$password@$database < test2.sql" 2>&1
+Write-Host "Sonuc: $result2" -ForegroundColor Yellow
 
-if ($result2.Length -gt 0) {
-    $result2 | Out-File "test2_output.txt"
-    Write-Host "Sonuc test2_output.txt'ye kaydedildi" -ForegroundColor Green
-}
+# TEST 3: Source satır sayısı
+Write-Host "`nTEST 3: Source satir sayisi" -ForegroundColor Cyan
+@"
+SET HEADING OFF
+SET FEEDBACK OFF
+SELECT COUNT(*) FROM all_source 
+WHERE owner = UPPER('$schema') 
+AND name = UPPER('$procname') 
+AND type = 'PROCEDURE';
+EXIT;
+"@ | Out-File -FilePath "test3.sql" -Encoding ASCII
 
-# TEST 3: DEFINE kullanarak
-Write-Host "`nTEST 3: DEFINE kullanarak" -ForegroundColor Cyan
+$result3 = & cmd /c "sqlplus -s $username/$password@$database < test3.sql" 2>&1
+Write-Host "Satir sayisi: $result3" -ForegroundColor Yellow
+
+# TEST 4: İlk 5 satır source
+Write-Host "`nTEST 4: Ilk 5 satir source" -ForegroundColor Cyan
+@"
+SET HEADING OFF
+SET FEEDBACK OFF
+SET PAGESIZE 0
+SET LINESIZE 1000
+SELECT text FROM all_source 
+WHERE owner = UPPER('$schema') 
+AND name = UPPER('$procname') 
+AND type = 'PROCEDURE'
+AND line <= 5
+ORDER BY line;
+EXIT;
+"@ | Out-File -FilePath "test4.sql" -Encoding ASCII
+
+Write-Host "CMD ile calistirma:" -ForegroundColor Gray
+$result4 = & cmd /c "sqlplus -s $username/$password@$database < test4.sql" 2>&1
+Write-Host $result4 -ForegroundColor Green
+
+# TEST 5: Dosyaya yazdırma
+Write-Host "`nTEST 5: SPOOL ile dosyaya yazma" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
 SET PAGESIZE 0
 SET LINESIZE 32767
 SET TRIMSPOOL ON
-SET TERMOUT OFF
-SET LONG 1000000
-SET VERIFY OFF
-DEFINE v_schema = '&1'
-DEFINE v_proc = '&2'
-SELECT text FROM all_source WHERE owner = UPPER('&&v_schema') AND name = UPPER('&&v_proc') AND type = 'PROCEDURE' ORDER BY line;
+SET TERMOUT ON
+SET ECHO OFF
+SPOOL test5_output.txt
+SELECT text FROM all_source 
+WHERE owner = UPPER('$schema') 
+AND name = UPPER('$procname') 
+AND type = 'PROCEDURE'
+ORDER BY line;
+SPOOL OFF
 EXIT;
-"@ | Out-File -FilePath "test3.sql" -Encoding ASCII
+"@ | Out-File -FilePath "test5.sql" -Encoding ASCII
 
-Write-Host "Komut: sqlplus -s ... @test3.sql $schema $procname" -ForegroundColor Gray
-$result3 = & sqlplus -s "$username/$password@$database" "@test3.sql" $schema $procname | Out-String
-Write-Host "Sonuc uzunlugu: $($result3.Length) karakter" -ForegroundColor Yellow
+& cmd /c "sqlplus -s $username/$password@$database < test5.sql > nul 2>&1"
 
-if ($result3.Length -gt 0) {
-    $result3 | Out-File "test3_output.txt"
-    Write-Host "Sonuc test3_output.txt'ye kaydedildi" -ForegroundColor Green
-}
-
-# TEST 4: Process ile çalıştırma
-Write-Host "`nTEST 4: Start-Process ile" -ForegroundColor Cyan
-$tempFile = "test4_output.txt"
-
-$process = Start-Process -FilePath "sqlplus" `
-    -ArgumentList "-s", "$username/$password@$database", "@test1.sql", $schema, $procname `
-    -NoNewWindow -Wait -RedirectStandardOutput $tempFile -PassThru
-
-if (Test-Path $tempFile) {
-    $fileSize = (Get-Item $tempFile).Length
-    Write-Host "Dosya boyutu: $fileSize byte" -ForegroundColor Yellow
-    
-    if ($fileSize -gt 0) {
+if (Test-Path "test5_output.txt") {
+    $size = (Get-Item "test5_output.txt").Length
+    Write-Host "SPOOL dosya boyutu: $size byte" -ForegroundColor Yellow
+    if ($size -gt 0) {
         Write-Host "Ilk 200 karakter:" -ForegroundColor Gray
-        $content = Get-Content $tempFile -Raw
+        $content = Get-Content "test5_output.txt" -Raw
         Write-Host $content.Substring(0, [Math]::Min(200, $content.Length)) -ForegroundColor DarkGray
     }
 }
 
-# TEST 5: Sadece satır sayısı kontrolü
-Write-Host "`nTEST 5: Satirlari say" -ForegroundColor Cyan
+# TEST 6: Farklı encoding
+Write-Host "`nTEST 6: UTF8 encoding ile" -ForegroundColor Cyan
 @"
 SET HEADING OFF
 SET FEEDBACK OFF
-SELECT COUNT(*) || ' satir bulundu' FROM all_source WHERE owner = UPPER('$schema') AND name = UPPER('$procname') AND type = 'PROCEDURE';
+SET PAGESIZE 0
+SET LINESIZE 32767
+SELECT text FROM all_source 
+WHERE owner = UPPER('$schema') 
+AND name = UPPER('$procname') 
+AND type = 'PROCEDURE'
+AND ROWNUM <= 10
+ORDER BY line;
 EXIT;
-"@ | Out-File -FilePath "test5.sql" -Encoding ASCII
+"@ | Out-File -FilePath "test6.sql" -Encoding UTF8
 
-$result5 = & sqlplus -s "$username/$password@$database" "@test5.sql"
-Write-Host $result5 -ForegroundColor Yellow
+# Invoke-Expression kullan
+$cmd = "sqlplus -s $username/$password@$database @test6.sql"
+$result6 = Invoke-Expression $cmd 2>&1 | Out-String
+Write-Host "Sonuc uzunlugu: $($result6.Length)" -ForegroundColor Yellow
 
-# Karşılaştırma
-Write-Host "`n===== SONUC KARSILASTIRMA =====" -ForegroundColor Green
-Write-Host "Test 1 (Parametre): $($result1.Length) karakter" -ForegroundColor $(if($result1.Length -gt 0){"Green"}else{"Red"})
-Write-Host "Test 2 (Dogrudan): $($result2.Length) karakter" -ForegroundColor $(if($result2.Length -gt 0){"Green"}else{"Red"})
-Write-Host "Test 3 (DEFINE): $($result3.Length) karakter" -ForegroundColor $(if($result3.Length -gt 0){"Green"}else{"Red"})
-Write-Host "Test 4 (Process): $fileSize byte" -ForegroundColor $(if($fileSize -gt 0){"Green"}else{"Red"})
+# TEST 7: NLS ayarları
+Write-Host "`nTEST 7: NLS ayarlari" -ForegroundColor Cyan
+@"
+SET HEADING OFF
+SET FEEDBACK OFF
+SELECT parameter || '=' || value 
+FROM nls_session_parameters 
+WHERE parameter IN ('NLS_LANGUAGE', 'NLS_TERRITORY', 'NLS_CHARACTERSET');
+EXIT;
+"@ | Out-File -FilePath "test7.sql" -Encoding ASCII
+
+$result7 = & cmd /c "sqlplus -s $username/$password@$database < test7.sql" 2>&1
+Write-Host $result7 -ForegroundColor Gray
+
+# TEST 8: Hata kontrolü
+Write-Host "`nTEST 8: SQLPlus hata kontrolu" -ForegroundColor Cyan
+@"
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+SET HEADING OFF
+SET FEEDBACK OFF
+SET PAGESIZE 0
+SELECT 'Baslangic' FROM DUAL;
+SELECT text FROM all_source 
+WHERE owner = UPPER('$schema') 
+AND name = UPPER('$procname') 
+AND type = 'PROCEDURE'
+AND ROWNUM = 1;
+SELECT 'Bitis' FROM DUAL;
+EXIT;
+"@ | Out-File -FilePath "test8.sql" -Encoding ASCII
+
+$result8 = & sqlplus -s "$username/$password@$database" "@test8.sql" 2>&1 | Out-String
+Write-Host "Hata kontrolu sonucu:" -ForegroundColor Yellow
+Write-Host $result8 -ForegroundColor Gray
 
 # Temizlik
 Remove-Item "test*.sql", "test*_output.txt" -Force -ErrorAction SilentlyContinue
 
-Write-Host "`nONERI:" -ForegroundColor Yellow
-if ($result2.Length -gt 0 -and $result1.Length -eq 0) {
-    Write-Host "Parametre kullanimi calismiyor. Dogrudan deger kullanin." -ForegroundColor Red
+Write-Host "`n===== ONERILER =====" -ForegroundColor Green
+if ($result3 -match "^\s*0\s*$") {
+    Write-Host "- Source bulunamadi. Object type PROCEDURE degil olabilir." -ForegroundColor Red
+    Write-Host "- Veya kullanici ALL_SOURCE tablosunu goremiyor olabilir." -ForegroundColor Red
+} elseif (Test-Path "test5_output.txt" -and (Get-Item "test5_output.txt").Length -gt 0) {
+    Write-Host "- SPOOL calisiyor. Bu yontemi kullanin." -ForegroundColor Green
 }
 
 Read-Host "`nEnter'a basin"
