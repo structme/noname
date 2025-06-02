@@ -1,3 +1,6 @@
+Bu hata `Measure-Object` komutunun sonucunu doğru şekilde almadığımız için oluşuyor. İşte düzeltilmiş kod:
+
+```powershell
 # Proje klasörüne gidin
 cd "C:\path\to\your\project"
 
@@ -16,6 +19,46 @@ Get-ChildItem -Recurse -File | ForEach-Object {
     }
 }
 
-# Benzersiz sonuçları sırala ve kaydet
-$results | Sort-Object -Unique | Out-File "schema_procedures.txt" -Encoding UTF8
-Write-Host "Toplam benzersiz kayıt: $($results | Sort-Object -Unique | Measure-Object).Count"
+# Benzersiz sonuçları al
+$uniqueResults = $results | Sort-Object -Unique
+
+# Dosyaya kaydet
+$uniqueResults | Out-File "schema_procedures.txt" -Encoding UTF8
+
+# Doğru sayıyı göster
+$count = $uniqueResults.Count
+Write-Host "Toplam benzersiz kayıt: $count"
+```
+
+Alternatif olarak, daha kısa bir yöntem:
+
+```powershell
+cd "C:\path\to\your\project"
+
+$pattern = '\b[a-zA-Z0-9_]+\.[pP][rR]_[a-zA-Z0-9_]+'
+$results = @()
+
+Get-ChildItem -Recurse -File | ForEach-Object {
+    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content) {
+        $matches = [regex]::Matches($content, $pattern)
+        foreach ($match in $matches) {
+            $results += $match.Value.ToUpper()
+        }
+    }
+}
+
+# Benzersiz sonuçları al ve say
+$uniqueResults = $results | Sort-Object -Unique
+$uniqueResults | Out-File "schema_procedures.txt" -Encoding UTF8
+
+# Sayıyı göster - 3 farklı yöntem:
+Write-Host "Toplam benzersiz kayıt: $($uniqueResults.Count)"
+# veya
+Write-Host "Toplam benzersiz kayıt: $(@($uniqueResults).Count)"
+# veya
+$count = ($results | Sort-Object -Unique | Measure-Object).Count
+Write-Host "Toplam benzersiz kayıt: $count"
+```
+
+Sorun şuydu: `$($results | Sort-Object -Unique | Measure-Object).Count` ifadesi bir nesne döndürüyordu, biz de onun `.Count` özelliğini almak yerine nesnenin kendisini yazdırıyorduk. Yukarıdaki düzeltmelerle artık doğru sayıyı göreceksiniz.
