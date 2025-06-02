@@ -1,7 +1,14 @@
-$klasor = "C:\yol"
+# Kullanıcıdan klasör yolunu al
+$klasor = Read-Host "Lütfen işlenecek klasör yolunu girin"
 
-# Liste.txt dosyasını temizle (varsa)
-$listeDosyasi = Join-Path $klasor "liste.txt"
+# Yolun geçerli olup olmadığını kontrol et
+if (-not (Test-Path $klasor)) {
+    Write-Host "Hata: Belirtilen yol bulunamadı!" -ForegroundColor Red
+    exit
+}
+
+# Liste.txt dosyasını script'in çalıştığı yere kaydet
+$listeDosyasi = Join-Path (Get-Location) "liste.txt"
 if (Test-Path $listeDosyasi) {
     Remove-Item $listeDosyasi
 }
