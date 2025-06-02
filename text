@@ -1,50 +1,62 @@
-Kodunuz zaten doğru şekilde yazılmış ve tüm kayıtları büyük harfle kaydediyor. `$match.Value.ToUpper()` satırı ile her eşleşmeyi büyük harfe çeviriyor.
+# PRC dosyalarını yeniden adlandırma script'i
+# Klasör yolunu buraya girin
+$rootPath = "C:\YourFolderPath"  # Bu yolu kendi klasör yolunuzla değiştirin
 
-Ancak kodu biraz daha optimize edebiliriz:
+# Tüm .prc dosyalarını bul (alt klasörler dahil)
+$prcFiles = Get-ChildItem -Path $rootPath -Filter "*.prc" -Recurse
 
-```powershell
-# Proje klasörüne gidin
-cd "C:\path\to\your\project"
+Write-Host "Toplam $($prcFiles.Count) adet .prc dosyası bulundu." -ForegroundColor Green
 
-# Pattern: şema_adı.pr_prosedür_adı formatını yakala (büyük/küçük harf duyarsız)
-$pattern = '\b[a-zA-Z0-9_]+\.[pP][rR]_[a-zA-Z0-9_]+'
-$results = @()
-
-Write-Host "Dosyalar taranıyor..."
-
-Get-ChildItem -Recurse -File | ForEach-Object {
-    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content) {
-        $matches = [regex]::Matches($content, $pattern)
-        foreach ($match in $matches) {
-            # ToUpper() ile büyük harfe çevir
-            $results += $match.Value.ToUpper()
+foreach ($file in $prcFiles) {
+    try {
+        Write-Host "`nİşleniyor: $($file.FullName)" -ForegroundColor Yellow
+        
+        # Dosyanın ilk satırını oku
+        $firstLine = Get-Content -Path $file.FullName -TotalCount 1
+        
+        if ([string]::IsNullOrWhiteSpace($firstLine)) {
+            Write-Host "  UYARI: Dosya boş veya ilk satır boş - Atlanıyor" -ForegroundColor Red
+            continue
         }
+        
+        Write-Host "  İlk satır: $firstLine" -ForegroundColor Cyan
+        
+        # İlk satırdan şema ve prosedür adını çıkar
+        # Format: şema.pr_prosedüradi şeklinde olduğunu varsayıyoruz
+        if ($firstLine -match "^(\w+)\.(\w+)") {
+            $schema = $matches[1].ToUpper()
+            $procedureName = $matches[2].ToUpper()
+            
+            # Yeni dosya adı
+            $newFileName = "$schema.$procedureName.prc"
+            $newFilePath = Join-Path -Path $file.DirectoryName -ChildPath $newFileName
+            
+            Write-Host "  Şema: $schema" -ForegroundColor Green
+            Write-Host "  Prosedür: $procedureName" -ForegroundColor Green
+            Write-Host "  Yeni dosya adı: $newFileName" -ForegroundColor Green
+            
+            # Eğer yeni dosya adı mevcut dosya adından farklıysa yeniden adlandır
+            if ($file.FullName -ne $newFilePath) {
+                # Hedef dosya zaten varsa kontrol et
+                if (Test-Path -Path $newFilePath) {
+                    Write-Host "  UYARI: Hedef dosya zaten mevcut - Atlanıyor" -ForegroundColor Red
+                    continue
+                }
+                
+                # Dosyayı yeniden adlandır
+                Rename-Item -Path $file.FullName -NewName $newFileName
+                Write-Host "  BAŞARILI: Dosya yeniden adlandırıldı" -ForegroundColor Green
+            } else {
+                Write-Host "  BİLGİ: Dosya adı zaten doğru formatta" -ForegroundColor Blue
+            }
+        } else {
+            Write-Host "  HATA: İlk satır beklenen formatta değil (şema.prosedür)" -ForegroundColor Red
+        }
+        
+    } catch {
+        Write-Host "  HATA: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
-# Benzersiz sonuçları al ve sırala
-$uniqueResults = $results | Sort-Object -Unique
-
-# Dosyaya kaydet (tüm kayıtlar büyük harf olacak)
-$uniqueResults | Out-File "schema_procedures.txt" -Encoding UTF8
-
-# Sonuçları göster
-Write-Host "Toplam benzersiz kayıt: $($uniqueResults.Count)"
-Write-Host "Sonuçlar 'schema_procedures.txt' dosyasına kaydedildi."
-
-# İlk 10 sonucu örnek olarak göster
-if ($uniqueResults.Count -gt 0) {
-    Write-Host "`nİlk 10 sonuç:"
-    $uniqueResults | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
-}
-```
-
-Eğer sadece büyük harf konusunda ek güvence istiyorsanız, dosyaya kaydetmeden önce bir kez daha `ToUpper()` uygulayabilirsiniz:
-
-```powershell
-# Ekstra güvence için kaydetmeden önce bir kez daha büyük harfe çevir
-$uniqueResults = $results | Sort-Object -Unique | ForEach-Object { $_.ToUpper() }
-```
-
-Kod zaten doğru çalışıyor, tüm kayıtlar büyük harfle `schema_procedures.txt` dosyasına kaydedilecek.
+Write-Host "`nİşlem tamamlandı!" -ForegroundColor Green
+Read-Host "Çıkmak için Enter tuşuna basın"
