@@ -1,5 +1,11 @@
 $klasor = "C:\yol"
 
+# Liste.txt dosyasını temizle (varsa)
+$listeDosyasi = Join-Path $klasor "liste.txt"
+if (Test-Path $listeDosyasi) {
+    Remove-Item $listeDosyasi
+}
+
 Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object { 
     $line = Get-Content $_.FullName -TotalCount 1
     
@@ -17,6 +23,9 @@ Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object {
         try {
             Rename-Item -Path $_.FullName -NewName "$yeniIsim$uzanti" -ErrorAction Stop
             Write-Host "Başarılı: $($_.Name) -> $yeniIsim$uzanti" -ForegroundColor Green
+            
+            # Liste.txt'ye kaydet
+            $yeniIsim | Out-File -FilePath $listeDosyasi -Append -Encoding UTF8
         }
         catch {
             Write-Host "Hata: $($_.Name) yeniden adlandırılamadı - $($_.Exception.Message)" -ForegroundColor Red
