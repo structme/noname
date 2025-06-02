@@ -1,4 +1,6 @@
-Bu hata `Measure-Object` komutunun sonucunu doğru şekilde almadığımız için oluşuyor. İşte düzeltilmiş kod:
+Kodunuz zaten doğru şekilde yazılmış ve tüm kayıtları büyük harfle kaydediyor. `$match.Value.ToUpper()` satırı ile her eşleşmeyi büyük harfe çeviriyor.
+
+Ancak kodu biraz daha optimize edebiliriz:
 
 ```powershell
 # Proje klasörüne gidin
@@ -7,6 +9,8 @@ cd "C:\path\to\your\project"
 # Pattern: şema_adı.pr_prosedür_adı formatını yakala (büyük/küçük harf duyarsız)
 $pattern = '\b[a-zA-Z0-9_]+\.[pP][rR]_[a-zA-Z0-9_]+'
 $results = @()
+
+Write-Host "Dosyalar taranıyor..."
 
 Get-ChildItem -Recurse -File | ForEach-Object {
     $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
@@ -19,46 +23,28 @@ Get-ChildItem -Recurse -File | ForEach-Object {
     }
 }
 
-# Benzersiz sonuçları al
+# Benzersiz sonuçları al ve sırala
 $uniqueResults = $results | Sort-Object -Unique
 
-# Dosyaya kaydet
+# Dosyaya kaydet (tüm kayıtlar büyük harf olacak)
 $uniqueResults | Out-File "schema_procedures.txt" -Encoding UTF8
 
-# Doğru sayıyı göster
-$count = $uniqueResults.Count
-Write-Host "Toplam benzersiz kayıt: $count"
+# Sonuçları göster
+Write-Host "Toplam benzersiz kayıt: $($uniqueResults.Count)"
+Write-Host "Sonuçlar 'schema_procedures.txt' dosyasına kaydedildi."
+
+# İlk 10 sonucu örnek olarak göster
+if ($uniqueResults.Count -gt 0) {
+    Write-Host "`nİlk 10 sonuç:"
+    $uniqueResults | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
+}
 ```
 
-Alternatif olarak, daha kısa bir yöntem:
+Eğer sadece büyük harf konusunda ek güvence istiyorsanız, dosyaya kaydetmeden önce bir kez daha `ToUpper()` uygulayabilirsiniz:
 
 ```powershell
-cd "C:\path\to\your\project"
-
-$pattern = '\b[a-zA-Z0-9_]+\.[pP][rR]_[a-zA-Z0-9_]+'
-$results = @()
-
-Get-ChildItem -Recurse -File | ForEach-Object {
-    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content) {
-        $matches = [regex]::Matches($content, $pattern)
-        foreach ($match in $matches) {
-            $results += $match.Value.ToUpper()
-        }
-    }
-}
-
-# Benzersiz sonuçları al ve say
-$uniqueResults = $results | Sort-Object -Unique
-$uniqueResults | Out-File "schema_procedures.txt" -Encoding UTF8
-
-# Sayıyı göster - 3 farklı yöntem:
-Write-Host "Toplam benzersiz kayıt: $($uniqueResults.Count)"
-# veya
-Write-Host "Toplam benzersiz kayıt: $(@($uniqueResults).Count)"
-# veya
-$count = ($results | Sort-Object -Unique | Measure-Object).Count
-Write-Host "Toplam benzersiz kayıt: $count"
+# Ekstra güvence için kaydetmeden önce bir kez daha büyük harfe çevir
+$uniqueResults = $results | Sort-Object -Unique | ForEach-Object { $_.ToUpper() }
 ```
 
-Sorun şuydu: `$($results | Sort-Object -Unique | Measure-Object).Count` ifadesi bir nesne döndürüyordu, biz de onun `.Count` özelliğini almak yerine nesnenin kendisini yazdırıyorduk. Yukarıdaki düzeltmelerle artık doğru sayıyı göreceksiniz.
+Kod zaten doğru çalışıyor, tüm kayıtlar büyük harfle `schema_procedures.txt` dosyasına kaydedilecek.
