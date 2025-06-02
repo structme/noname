@@ -9,13 +9,13 @@ if (Test-Path $listeDosyasi) {
 Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object { 
     $line = Get-Content $_.FullName -TotalCount 1
     
-    if ($line -match "\b[\w]+\.[\w]+\b" -or $line -match '[\w]+\."[\w_]+["|\s]') {
-        # Bulunan ismi büyük harfe çevir
-        $yeniIsim = $matches[0].ToUpper()
-        
-        # Eğer tırnak içindeki format varsa, sadece prosedür ismini al
-        if ($yeniIsim -match '"(.+?)"') {
-            $yeniIsim = $matches[1].ToUpper()
+    if ($line -match "\b[\w]+\.[\w]+\b" -or $line -match '([\w]+)\."([\w_]+)"') {
+        if ($matches.Count -eq 3) {
+            # Şema."prosedür" formatı - şema ve prosedürü birleştir
+            $yeniIsim = ($matches[1] + "." + $matches[2]).ToUpper()
+        } else {
+            # Normal format
+            $yeniIsim = $matches[0].ToUpper()
         }
         
         # Dosya uzantısını koru
