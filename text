@@ -1,49 +1,60 @@
-# Kullanıcıdan klasör yolunu al
-$klasor = Read-Host "Lütfen işlenecek klasör yolunu girin"
+# Dosya yollarını belirleyin
+$dosyaA = "a.txt"  # A dosyasının yolu
+$dosyaB = "b.txt"  # B dosyasının yolu
 
-# Yolun geçerli olup olmadığını kontrol et
-if (-not (Test-Path $klasor)) {
-    Write-Host "Hata: Belirtilen yol bulunamadı!" -ForegroundColor Red
-    exit
+# Dosyaların varlığını kontrol et
+if (-not (Test-Path $dosyaA)) {
+    Write-Error "A dosyası bulunamadı: $dosyaA"
+    exit 1
 }
 
-# Liste.txt dosyasını script'in çalıştığı yere kaydet
-$listeDosyasi = Join-Path (Get-Location) "liste.txt"
-if (Test-Path $listeDosyasi) {
-    Remove-Item $listeDosyasi
+if (-not (Test-Path $dosyaB)) {
+    Write-Error "B dosyası bulunamadı: $dosyaB"
+    exit 1
 }
 
-Get-ChildItem -Recurse -Filter *.prc -Path $klasor | ForEach-Object { 
-    $line = Get-Content $_.FullName -TotalCount 1
-    
-    if ($line -match "\b[\w]+\.[\w]+\b" -or $line -match '([\w]+)\."([\w_]+)"') {
-        if ($matches.Count -eq 3) {
-            # Şema."prosedür" formatı - şema ve prosedürü birleştir
-            $yeniIsim = ($matches[1] + "." + $matches[2]).ToUpper()
+# Dosyaları oku
+$isimlerA = Get-Content $dosyaA | Where-Object { $_.Trim() -ne "" }
+$isimlerB = Get-Content $dosyaB | Where-Object { $_.Trim() -ne "" }
+
+# B dosyasındaki isimleri HashSet'e çevir (daha hızlı arama için)
+$isimlerBSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($isim in $isimlerB) {
+    $isimlerBSet.Add($isim.Trim()) | Out-Null
+}
+
+# Bulunan ve bulunmayan isimleri ayır
+$bulunanlar = @()
+$bulunmayanlar = @()
+
+foreach ($isim in $isimlerA) {
+    $temizIsim = $isim.Trim()
+    if ($temizIsim -ne "") {
+        if ($isimlerBSet.Contains($temizIsim)) {
+            $bulunanlar += $temizIsim
         } else {
-            # Normal format
-            $yeniIsim = $matches[0].ToUpper()
+            $bulunmayanlar += $temizIsim
         }
-        
-        # Dosya uzantısını koru
-        $uzanti = $_.Extension
-        
-        # Yeni dosya yolunu oluştur
-        $yeniYol = Join-Path $_.Directory.FullName "$yeniIsim$uzanti"
-        
-        # Dosyayı yeniden adlandır
-        try {
-            Rename-Item -Path $_.FullName -NewName "$yeniIsim$uzanti" -ErrorAction Stop
-            Write-Host "Başarılı: $($_.Name) -> $yeniIsim$uzanti" -ForegroundColor Green
-            
-            # Liste.txt'ye kaydet
-            $yeniIsim | Out-File -FilePath $listeDosyasi -Append -Encoding UTF8
-        }
-        catch {
-            Write-Host "Hata: $($_.Name) yeniden adlandırılamadı - $($_.Exception.Message)" -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Host "Uygun isim bulunamadı: $($_.Name)" -ForegroundColor Yellow
     }
 }
+
+# Sonuçları dosyalara kaydet
+if ($bulunanlar.Count -gt 0) {
+    $bulunanlar | Out-File -FilePath "bulunan.txt" -Encoding UTF8
+    Write-Host "Bulunan isimler 'bulunan.txt' dosyasına kaydedildi. Toplam: $($bulunanlar.Count)"
+} else {
+    Write-Host "Hiç eşleşen isim bulunamadı."
+}
+
+if ($bulunmayanlar.Count -gt 0) {
+    $bulunmayanlar | Out-File -FilePath "bulunmayan.txt" -Encoding UTF8
+    Write-Host "Bulunmayan isimler 'bulunmayan.txt' dosyasına kaydedildi. Toplam: $($bulunmayanlar.Count)"
+} else {
+    Write-Host "Tüm isimler B dosyasında mevcut."
+}
+
+# Özet bilgi
+Write-Host "`nÖzet:"
+Write-Host "A dosyasındaki toplam isim: $($isimlerA.Count)"
+Write-Host "B dosyasında bulunan: $($bulunanlar.Count)"
+Write-Host "B dosyasında bulunmayan: $($bulunmayanlar.Count)"
