@@ -1,113 +1,23 @@
--- Yöntem 1: EXISTS ile kontrol - TÜM a=39 kayıtları için
-SELECT 
-    t1.tarih_sutunu,
-    t1.a,
-    t1.b,
-    t1.c,
-    t1.rowid as kayit_id, -- Aynı tarihli kayıtları ayırt etmek için
-    CASE 
-        WHEN EXISTS (
-            SELECT 1 
-            FROM tablo_adi t2 
-            WHERE t2.a = 30 
-              AND t2.b = t1.b 
-              AND t2.c = t1.c 
-              AND t2.tarih_sutunu > t1.tarih_sutunu
-        ) THEN 'VAR' 
-        ELSE 'YOK' 
-    END AS sonraki_kayit_var_mi
-FROM tablo_adi t1
-WHERE t1.a = 39
-ORDER BY t1.b, t1.c, t1.tarih_sutunu;
-
--- Yöntem 2: JOIN ile detaylı bilgi
-SELECT 
-    t1.tarih_sutunu AS ilk_tarih,
-    t1.a AS ilk_a_degeri,
-    t1.b,
-    t1.c,
-    t2.tarih_sutunu AS sonraki_tarih,
-    t2.a AS sonraki_a_degeri
-FROM tablo_adi t1
-LEFT JOIN tablo_adi t2 ON (
-    t2.a = 30 
-    AND t2.b = t1.b 
-    AND t2.c = t1.c 
-    AND t2.tarih_sutunu > t1.tarih_sutunu
-)
-WHERE t1.a = 39
-ORDER BY t1.b, t1.c, t1.tarih_sutunu;
-
--- Yöntem 3: Window Function ile (En yakın sonraki kaydı bulur)
-WITH kayitlar AS (
-    SELECT 
-        tarih_sutunu,
-        a, b, c,
-        LEAD(a) OVER (
-            PARTITION BY b, c 
-            ORDER BY tarih_sutunu
-        ) AS sonraki_a,
-        LEAD(tarih_sutunu) OVER (
-            PARTITION BY b, c 
-            ORDER BY tarih_sutunu
-        ) AS sonraki_tarih
-    FROM tablo_adi
-    WHERE a IN (39, 30)
-)
-SELECT 
-    tarih_sutunu,
-    a, b, c,
-    sonraki_a,
-    sonraki_tarih,
-    CASE 
-        WHEN a = 39 AND sonraki_a = 30 THEN 'UYGUN KAYIT VAR'
-        WHEN a = 39 AND sonraki_a IS NULL THEN 'SONRAKI KAYIT YOK'
-        WHEN a = 39 THEN 'SONRAKI KAYIT UYGUN DEĞİL'
-    END AS durum
-FROM kayitlar
-WHERE a = 39;
-
--- Yöntem 4: Sadece eşleşen kayıtları göster
-SELECT DISTINCT
-    t1.tarih_sutunu AS a39_tarihi,
-    t1.b,
-    t1.c,
-    MIN(t2.tarih_sutunu) AS ilk_a30_tarihi
-FROM tablo_adi t1
-INNER JOIN tablo_adi t2 ON (
-    t2.a = 30 
-    AND t2.b = t1.b 
-    AND t2.c = t1.c 
-    AND t2.tarih_sutunu > t1.tarih_sutunu
-)
-WHERE t1.a = 39
-GROUP BY t1.tarih_sutunu, t1.b, t1.c
-ORDER BY t1.b, t1.c;
-
--- Yöntem 5: Performanslı sürüm (Index kullanımı için)
-SELECT 
-    COUNT(*) AS toplam_a39_kayit,
-    COUNT(CASE WHEN sonraki_var = 'VAR' THEN 1 END) AS eslesen_kayit_sayisi
-FROM (
-    SELECT 
-        t1.tarih_sutunu,
-        t1.b,
-        t1.c,
-        CASE 
-            WHEN EXISTS (
-                SELECT /*+ INDEX(t2, idx_tablo_a_bc_tarih) */ 1 
-                FROM tablo_adi t2 
-                WHERE t2.a = 30 
-                  AND t2.b = t1.b 
-                  AND t2.c = t1.c 
-                  AND t2.tarih_sutunu > t1.tarih_sutunu
-                  AND ROWNUM = 1
-            ) THEN 'VAR' 
-            ELSE 'YOK' 
-        END AS sonraki_var
-    FROM tablo_adi t1
-    WHERE t1.a = 39
+-- 1. Eşleşen kayıtlar → 'VAROLAN' olarak eklenecek
+INSERT INTO x (s1, s2, s3, diger_kolonlar, kaynak)
+SELECT y.s1, y.s2, y.s3, y.diger_kolonlar, 'VAROLAN'
+FROM temp_y y
+WHERE EXISTS (
+    SELECT 1
+    FROM x
+    WHERE x.s1 = y.s1
+      AND x.s2 = y.s2
+      AND x.s3 = y.s3
 );
 
--- Index önerisi (Performance için):
--- CREATE INDEX idx_tablo_a_bc_tarih ON tablo_adi(a, b, c, tarih_sutunu);
+-- 2. Geri kalan eşleşmeyen kayıtlar → 'YENI' olarak eklenecek
+INSERT INTO x (s1, s2, s3, diger_kolonlar, kaynak)
+SELECT y.s1, y.s2, y.s3, y.diger_kolonlar, 'YENI'
+FROM temp_y y
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM x
+    WHERE x.s1 = y.s1
+      AND x.s2 = y.s2
+      AND x.s3 = y.s3
+);
