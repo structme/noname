@@ -1,23 +1,13 @@
--- 1. Eşleşen kayıtlar → 'VAROLAN' olarak eklenecek
-INSERT INTO x (s1, s2, s3, diger_kolonlar, kaynak)
-SELECT y.s1, y.s2, y.s3, y.diger_kolonlar, 'VAROLAN'
-FROM temp_y y
+SELECT *
+FROM Utku u
 WHERE EXISTS (
     SELECT 1
-    FROM x
-    WHERE x.s1 = y.s1
-      AND x.s2 = y.s2
-      AND x.s3 = y.s3
-);
-
--- 2. Geri kalan eşleşmeyen kayıtlar → 'YENI' olarak eklenecek
-INSERT INTO x (s1, s2, s3, diger_kolonlar, kaynak)
-SELECT y.s1, y.s2, y.s3, y.diger_kolonlar, 'YENI'
-FROM temp_y y
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM x
-    WHERE x.s1 = y.s1
-      AND x.s2 = y.s2
-      AND x.s3 = y.s3
+    FROM (
+        SELECT *
+        FROM Utku t
+        WHERE t.status IN ('AKTIF', 'PASIF') AND t.id = u.id
+        ORDER BY ABS(TRUNC(SYSDATE) - t.tarih)
+        FETCH FIRST 1 ROWS ONLY
+    ) latest
+    WHERE latest.id = u.id
 );
