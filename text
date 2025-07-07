@@ -1,3 +1,4 @@
 SELECT 
-  REGEXP_SUBSTR(DBMS_LOB.SUBSTR(kolon_adi, 4000, 1), '(^|[^0-9])(\d{10})([^0-9]|$)', 1, 1, NULL, 2) AS tckn_10
-FROM tablo_adi;
+    REGEXP_SUBSTR(kolon_adi, '"[^"]*":"(\d{10})"', 1, 1, NULL, 1) AS on_haneli_sayi
+FROM tablo_adi
+WHERE REGEXP_LIKE(kolon_adi, '"[^"]*":"(\d{10})"');
