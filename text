@@ -1,4 +1,6 @@
 SELECT 
-    REGEXP_SUBSTR(kolon_adi, '"[^"]*":"(\d{10})"', 1, 1, NULL, 1) AS on_haneli_sayi
+    JSON_VALUE(kolon_adi, '$.sorgulayantckn') AS sorgulayan_tckn,
+    JSON_VALUE(kolon_adi, '$.sorgulanantckn') AS sorgulanan_tckn
 FROM tablo_adi
-WHERE REGEXP_LIKE(kolon_adi, '"[^"]*":"(\d{10})"');
+WHERE LENGTH(JSON_VALUE(kolon_adi, '$.sorgulayantckn')) = 10
+   OR LENGTH(JSON_VALUE(kolon_adi, '$.sorgulanantckn')) = 10;
