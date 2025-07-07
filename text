@@ -1,3 +1,3 @@
 SELECT 
-  REGEXP_SUBSTR(DBMS_LOB.SUBSTR(kolon_adi, 4000, 1), '\d{10}', 1, 1) AS tckn_10haneli
+  REGEXP_SUBSTR(DBMS_LOB.SUBSTR(kolon_adi, 4000, 1), '(?<!\d)(\d{10})(?!\d)', 1, 1, NULL, 1) AS tckn_10haneli
 FROM tablo_adi;
