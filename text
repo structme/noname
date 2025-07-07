@@ -1,6 +1,8 @@
 SELECT 
-    JSON_VALUE(kolon_adi, '$.sorgulayantckn') AS sorgulayan_tckn,
-    JSON_VALUE(kolon_adi, '$.sorgulanantckn') AS sorgulanan_tckn
+    JSON_VALUE(kolon_adi, '$.methodname') AS method_name,
+    COUNT(*) AS toplam_sayi
 FROM tablo_adi
 WHERE LENGTH(JSON_VALUE(kolon_adi, '$.sorgulayantckn')) = 10
-   OR LENGTH(JSON_VALUE(kolon_adi, '$.sorgulanantckn')) = 10;
+   OR LENGTH(JSON_VALUE(kolon_adi, '$.sorgulanantckn')) = 10
+GROUP BY JSON_VALUE(kolon_adi, '$.methodname')
+ORDER BY COUNT(*) DESC;
