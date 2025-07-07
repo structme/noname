@@ -1,2 +1,2 @@
-SELECT REGEXP_SUBSTR(kolon_adi, '\d{10}', 1, 1) AS tckn_10haneli
+SELECT CAST(REGEXP_SUBSTR(kolon_adi, '\d{10}', 1, 1) AS VARCHAR2(20)) AS tckn_10haneli
 FROM tablo_adi;
