@@ -1,2 +1,3 @@
-SELECT RPAD(REGEXP_SUBSTR(kolon_adi, '\d{10}', 1, 1), 10, '0') AS tckn_10haneli
+SELECT 
+  REGEXP_SUBSTR(DBMS_LOB.SUBSTR(kolon_adi, 4000, 1), '\d{10}', 1, 1) AS tckn_10haneli
 FROM tablo_adi;
