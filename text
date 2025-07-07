@@ -1,13 +1,2 @@
-SELECT *
-FROM Utku u
-WHERE EXISTS (
-    SELECT 1
-    FROM (
-        SELECT *
-        FROM Utku t
-        WHERE t.status IN ('AKTIF', 'PASIF') AND t.id = u.id
-        ORDER BY ABS(TRUNC(SYSDATE) - t.tarih)
-        FETCH FIRST 1 ROWS ONLY
-    ) latest
-    WHERE latest.id = u.id
-);
+SELECT REGEXP_SUBSTR(kolon_adi, '\d{10}', 1, 1) AS tckn_10haneli
+FROM tablo_adi;
