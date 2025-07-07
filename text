@@ -1,3 +1,6 @@
+WITH veri AS (
+  SELECT TO_CLOB('{"sorgulayantckn":"1234567890","sorgulanantckn":"12345678901"}') AS kolon_adi FROM dual
+)
 SELECT 
   REGEXP_SUBSTR(DBMS_LOB.SUBSTR(kolon_adi, 4000, 1), '(?<!\d)(\d{10})(?!\d)', 1, 1, NULL, 1) AS tckn_10haneli
-FROM tablo_adi;
+FROM veri;
